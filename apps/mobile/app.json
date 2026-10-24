@@ -1,0 +1,8 @@
+{
+  "expo": {
+    "name":"CargoOrbit Driver","slug":"cargoorbit-driver","version":"0.1.0","orientation":"portrait","scheme":"cargoorbit","userInterfaceStyle":"light",
+    "android":{"package":"com.cargoorbit.driver","versionCode":1,"permissions":["CAMERA","ACCESS_NETWORK_STATE"],"allowBackup":false},
+    "plugins":[["expo-sqlite",{"useSQLCipher":true}], ["expo-camera",{"cameraPermission":"Allow CargoOrbit to scan LR labels and capture delivery evidence.","recordAudioAndroid":false}],"expo-secure-store"],
+    "extra":{"nativeEncryptionRequired":true}
+  }
+}

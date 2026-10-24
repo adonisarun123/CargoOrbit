@@ -1,0 +1,32 @@
+{
+  "name": "cargoorbit",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web \"npm run dev -w @cargoorbit/api\" \"npm run dev -w @cargoorbit/web\"",
+    "build": "npm run build -w @cargoorbit/database && npm run build -w @cargoorbit/domain && npm run build -w @cargoorbit/api && npm run build -w @cargoorbit/web",
+    "typecheck": "npm run build -w @cargoorbit/database && npm run build -w @cargoorbit/domain && npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "db:migrate": "tsx packages/database/src/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "worker": "npm run worker -w @cargoorbit/api",
+    "check": "npm run typecheck && npm test && npm run build",
+    "db:provision": "tsx scripts/provision-runtime.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "tsx": "^4.20.0",
+    "vitest": "^3.2.0",
+    "concurrently": "^9.2.0",
+    "@electric-sql/pglite": "^0.5.11",
+    "@playwright/test": "^1.64.1"
+  }
+}
