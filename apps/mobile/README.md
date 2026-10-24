@@ -15,7 +15,9 @@ npm run android
 
 SQLCipher is enabled by the Expo SQLite config plugin. **Expo Go is not supported**: startup probes `cipher_version` and refuses unencrypted storage. Preview and production native builds require an explicit HTTPS `EXPO_PUBLIC_API_URL`; missing/unsafe URLs fail before packaging. A local development build may opt into emulator HTTP with `CARGOORBIT_ALLOW_DEV_HTTP=true`. Release Android manifests deny cleartext traffic and device backup.
 
-The Android signing key, package ownership, distribution and rollout approval must be supplied by the operator. No credential, signing key, provider secret or production APK is included. Android native project generation was executed successfully; native compilation and emulator execution need the Android SDK and have not been demonstrated in this environment.
+Hosted [Android validation run 40120184596](https://github.com/adonisarun123/CargoOrbit/actions/runs/40120184596), at component commit `c57f1b02ac190984df368b37e4b15d192c9efc21`, compiled both unsigned APKs and passed the API 36 x86_64 emulator's encrypted-storage and forced-restart checks. Both saved phase-marker XML files were independently inspected. See [the evidence and limits](../../docs/ANDROID_SECURITY_REVIEW.md#hosted-native-validation-evidence).
+
+These are validation artifacts configured with `https://example.invalid/v1`. The operator must rebuild with the real HTTPS API, supply the approved Android signing identity, and complete physical-device/live-service acceptance before distribution. No production signing key or distributable production APK is included.
 
 ## Reproducible native builds and emulator checks
 
@@ -42,7 +44,7 @@ EAS_BUILD_PROFILE=diagnostics EXPO_PUBLIC_NATIVE_DIAGNOSTICS=true \
 bash apps/mobile/scripts/test-android-emulator.sh
 ```
 
-The harness refuses any APK with another package ID. It signs only this isolated test APK with a temporary local test identity, clears only its test package, waits for the first durable-capture marker, force-stops, restarts and checks the second marker. Native checks cover interrupted-state recovery, persisted photo bytes, conflict replacement, photo-before-draft sync, SQLCipher non-plaintext database header and wrong-key rejection. The test key is deleted after the run and never signs the driver app. Results and logs are written to `apps/mobile/native-test-results/`; CI should archive them. This executable harness supplements physical camera, OS, storage-pressure, server-connectivity and field acceptance; those still need real device evidence.
+The harness requires an isolated emulator and refuses any APK with another package ID. It signs only this isolated test APK with a temporary local test identity, clears only its test package, waits for the first durable-capture marker, force-stops, restarts and checks the second marker. Native checks cover interrupted-state recovery, persisted assignment/photo bytes, conflict replacement with the original retained, photo-before-draft sync and persisted acknowledgements, SQLCipher non-plaintext database header and wrong-key rejection. An exact Quickstep launcher ANR can be preserved and recovered once; repeated launcher failures and every app failure still fail the check. The successful hosted run needed no launcher recovery. The test key is deleted after the run and never signs the driver app. Results and logs are written to `apps/mobile/native-test-results/` and archived by CI for seven days. This executable harness supplements physical camera, OS, storage-pressure, server-connectivity and field acceptance; those still need real device evidence.
 
 `security/README.md` documents the hash-locked upstream node-forge guard used by the Expo tooling. Raw npm audit still reports the unpublished advisory; the explicit regression/mitigation report must be retained alongside it.
 
