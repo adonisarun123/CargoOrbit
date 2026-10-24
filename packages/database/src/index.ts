@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import type { AuditEvent, Context, DatabasePort, Entity, EntityQuery, EntityPageQuery, EntityPage, TenantUsage, MemberIdentity, Role, OutboxEvent, Transaction } from './types.js';
 import {pageBounds} from './pagination.js';
+import {searchBounds,searchProjection,shipmentSearchSql} from './search.js';
+import type {ShipmentSearchItem,ShipmentSearchQuery} from './types.js';
 export * from './types.js';
 export { MemoryDatabase } from './memory.js';
 
@@ -42,7 +44,7 @@ export class Database implements DatabasePort {
     this.runtimeCheck ??= this.pool.query<{ unsafe: boolean }>(`
       SELECT (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR pg_has_role(current_user,'cargoorbit_operator','MEMBER') OR has_schema_privilege(current_user,'public','CREATE') OR EXISTS (
         SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname='public' AND c.relname IN ('entities','audit_events','outbox_events')
+        WHERE n.nspname='public' AND c.relname IN ('entities','audit_events','outbox_events','shipment_search_terms')
           AND pg_has_role(current_user,c.relowner,'MEMBER')
       )) AS unsafe FROM pg_roles r WHERE r.rolname=current_user
     `).then(({ rows }) => {
@@ -191,6 +193,12 @@ export interface ReceiverIdentity {email:string;verified_contact:string|null;con
 
 class PostgresTransaction implements Transaction {
   constructor(private readonly client: PoolClient, private readonly ctx: Context, private readonly readOnly: boolean) {}
+
+  async searchConsignments(query:ShipmentSearchQuery):Promise<EntityPage<ShipmentSearchItem>> {
+    const bounds=searchBounds(this.ctx,query);
+    const result=await this.client.query<{id:string;data:Entity;matches:ShipmentSearchItem['matches']}>(shipmentSearchSql,[this.ctx.tenantId,bounds.type,bounds.like,bounds.match==='exact',bounds.q,bounds.afterId??null,this.ctx.role,this.ctx.organizationId??null,this.ctx.facilityIds??[],this.ctx.assignedDriverId??this.ctx.userId,bounds.limit+1]);
+    const rows=result.rows.slice(0,bounds.limit);return {items:rows.map(row=>searchProjection(row.data,row.matches)),...(result.rows.length>bounds.limit?{nextCursor:bounds.cursor(rows.at(-1)!.id)}:{})};
+  }
 
   async lookupMember(userId:string,role?:Role):Promise<MemberIdentity|undefined> {
     const result=await this.client.query(`SELECT u.id,u.name,u.email,u.verified_contact,u.contact_verified_at,m.id membership_id,m.role,m.organization_id,m.facility_ids

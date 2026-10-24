@@ -4,6 +4,8 @@ import type { Context, DatabasePort, Entity, Transaction } from '@cargoorbit/dat
 import { schemas } from './schemas.js';
 import { mapImportRows } from './imports.js';
 import { reserveCreationQuota } from './quotas.js';
+import { searchShipments } from './search.js';
+export { ShipmentSearchError, shipmentSearchTypes } from './search.js';
 export { ContractUsageService, ContractUsageError, contractUsageCeilingSchema } from './quotas.js';
 import { RECEIPT_DECLARATION, type Attempt, type Billing, type Consignment, type Evidence, type Facility, type Invoice, type Pod, type Policy, type ReceiverGrant } from './types.js';
 export * from './types.js';
@@ -32,6 +34,7 @@ export class WorkflowService {
  private readonly now:()=>Date; private readonly otpSecret:string;
  constructor(private readonly db:DatabasePort,private readonly options:WorkflowOptions={}){this.now=options.now??(()=>new Date());this.otpSecret=options.otpSecret??process.env.OTP_SECRET??'';}
  private timestamp(){return this.now().toISOString();}
+ async search(ctx:Context,query:unknown){return this.db.transaction(ctx,tx=>searchShipments(tx,ctx,query));}
  private async fresh(tx:Transaction,kind:string,id:string){if(await tx.get(kind,id))fail(409,'DUPLICATE','Identifier already exists');}
  private active(record:Entity){const at=this.timestamp();return record.active!==false&&(!record.activeFrom||String(record.activeFrom)<=at)&&(!record.activeUntil||String(record.activeUntil)>at);}
  private validateMaster(record:Record<string,any>){

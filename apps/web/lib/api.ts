@@ -1,4 +1,4 @@
-export type User = {id:string;name:string;email:string;role:string;tenantId:string;organizationId?:string;facilityIds?:string[];membershipId?:string;mfaEnabled?:boolean;verifiedContact?:string;sessionId?:string};
+export type User = {id:string;name:string;email:string;role:string;tenantId:string;organizationId?:string;facilityIds?:string[];assignedDriverId?:string;membershipId?:string;mfaEnabled?:boolean;verifiedContact?:string;sessionId?:string};
 export type Session = {accessToken:string;refreshToken?:string;expiresIn?:number;user:User};
 export type Row = {id:string;[key:string]:any};
 export const API_BASE=(process.env.NEXT_PUBLIC_API_URL||'http://localhost:4000/v1').replace(/\/$/,'');

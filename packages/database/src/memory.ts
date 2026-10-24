@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import {pageBounds} from './pagination.js';
+import {memoryShipmentSearch} from './search.js';
 import type { Context, DatabasePort, Entity, EntityQuery, EntityPageQuery, MemberIdentity, OutboxEvent, Transaction } from './types.js';
 
 /** Test adapter only. It intentionally is not selected by the deployed API. */
@@ -28,6 +29,7 @@ export class MemoryDatabase implements DatabasePort {
         return structuredClone([...table(kind).values()].filter(v=>matches(v,query.where??{})&&(!query.before||typeof v[query.before.field]==='string'&&String(v[query.before.field])<query.before.value)).slice(offset,offset+limit)) as E[];
       };
       const tx: Transaction = {
+        searchConsignments:async query=>memoryShipmentSearch(context,query,kind=>[...table(kind).values()]),
         lookupMember:async(userId,role)=>{const rows=[...table('members').values()].filter(row=>row.id===userId&&row.status==='active'&&(!role||row.role===role));return rows.length===1?structuredClone(rows[0]) as unknown as MemberIdentity:undefined;},
         page:async <E extends Entity>(kind:string,query:EntityPageQuery={})=>{const bounds=pageBounds(context.tenantId,kind,query);const values=[...table(kind).values()].filter(v=>matches(v,bounds.where)&&(!bounds.afterId||v.id>bounds.afterId)&&(!query.before||typeof v[query.before.field]==='string'&&String(v[query.before.field])<query.before.value)).sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0).slice(0,bounds.limit+1);const items=structuredClone(values.slice(0,bounds.limit)) as E[];return {items,...(values.length>bounds.limit?{nextCursor:bounds.cursor(items.at(-1)!.id)}:{})};},
         usage:async()=>[...snapshot.entries()].filter(([key])=>key.startsWith(`${context.tenantId}\u0000`)&&!['audit','outbox'].includes(key.split('\u0000')[1]!)).map(([key,rows])=>({kind:key.split('\u0000')[1]!,records:String(rows.size),metadataBytes:String([...rows.values()].reduce((sum,row)=>sum+Buffer.byteLength(JSON.stringify(row)),0)),objectBytes:String([...rows.values()].reduce((sum,row)=>sum+(['evidence','packets'].includes(key.split('\u0000')[1]!)&&Number.isSafeInteger(row.size)&&Number(row.size)>=0?BigInt(Number(row.size)):key.split('\u0000')[1]==='tenant_exports'&&Number.isSafeInteger(row.bytes)&&Number(row.bytes)>=0?BigInt(Number(row.bytes)):0n),0n))})).sort((a,b)=>a.kind.localeCompare(b.kind)),

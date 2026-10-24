@@ -20,3 +20,8 @@
 .app-footer b{padding:0 4px;font-weight:400}
 @media(max-width:1200px){.app-footer{padding-left:26px;padding-right:26px}}
 @media(max-width:800px){.table-footer{flex-direction:column;align-items:flex-start;gap:8px;padding:14px 16px}.app-footer{flex-direction:column;align-items:flex-start;gap:4px;padding:0 16px 22px}}
+
+/* Scoped cross-reference search keeps filters and paging usable on narrow screens. */
+.shipment-search-form{padding:22px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:18px}.shipment-search-options{display:grid;grid-template-columns:1fr 1fr 120px auto;align-items:end;gap:14px}.shipment-search-options>.button{min-height:41px}.shipment-search-summary{padding:0 22px;font-size:12px;color:var(--muted);line-height:1.6}.shipment-search-summary:not(:empty){padding-top:16px;padding-bottom:16px}.search-references{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px;max-width:360px}.search-references li{overflow-wrap:anywhere;white-space:normal}.search-references small{margin-bottom:3px}.search-shipment-id{max-width:240px;overflow-wrap:anywhere;white-space:normal}.search-pagination{display:flex;flex-wrap:wrap;gap:10px}.shipment-search td{vertical-align:top}.shipment-search .notice{margin:16px 22px}
+@media(max-width:1100px){.shipment-search-options{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.shipment-search-form{padding:16px}.shipment-search-options{grid-template-columns:1fr}.shipment-search-summary{padding-left:16px;padding-right:16px}.shipment-search .notice{margin:16px}.search-pagination{width:100%}.search-pagination>.button{flex:1}}

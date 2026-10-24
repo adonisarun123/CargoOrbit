@@ -33,6 +33,8 @@ export class AuthController {
 }
 @ApiTags('Workflow') @ApiBearerAuth() @UseGuards(AuthGuard) @Controller()
 export class WorkflowController {
+ @Get('search') @ApiOperation({summary:'Search authorized shipments by literal identifier with cursor pagination'})
+ search(@Req() req:AuthRequest,@Query() query:unknown){return workflow.search(req.actor,query);}
  @Post('actions/:action')
  action(@Param('action') action:string,@Body() body:unknown,@Req() req:AuthRequest){if(trustedActions.has(action))throw new HttpException('This action is restricted to trusted evidence services',403);return this.checkedAction(req,action,body);}
  private async checkedAction(req:AuthRequest,action:string,body:unknown){

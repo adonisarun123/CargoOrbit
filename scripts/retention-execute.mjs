@@ -23,7 +23,8 @@ async function execute(client,s,plan,manifest,operator){
  if(plan.action==='delete'){
   // A newly added tenant table must be reviewed explicitly before this erasure procedure can proceed.
   const tables=(await client.query("SELECT table_name FROM information_schema.columns WHERE table_schema='public' AND column_name='tenant_id'")).rows.map(r=>r.table_name);
-  if(tables.some(name=>!['entities','audit_events','outbox_events','memberships','tenant_usage'].includes(name)))throw new Error('UNREVIEWED_TENANT_TABLE');
+  // shipment_search_terms is a derived index with an enforced source FK ON DELETE CASCADE.
+  if(tables.some(name=>!['entities','audit_events','outbox_events','memberships','tenant_usage','shipment_search_terms'].includes(name)))throw new Error('UNREVIEWED_TENANT_TABLE');
   const userIds=(await client.query('SELECT DISTINCT user_id FROM memberships WHERE tenant_id=$1',[s.tenantId])).rows.map(r=>r.user_id);
   await client.query('DELETE FROM exit_sessions WHERE membership_id IN (SELECT id FROM memberships WHERE tenant_id=$1)',[s.tenantId]);
   await client.query('DELETE FROM auth_sessions WHERE membership_id IN (SELECT id FROM memberships WHERE tenant_id=$1)',[s.tenantId]);

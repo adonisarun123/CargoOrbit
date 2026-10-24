@@ -60,8 +60,12 @@ export interface EntityQuery {
 export interface EntityPageQuery {where?:Record<string,unknown>;before?:{field:string;value:string};limit?:number;cursor?:string}
 export interface EntityPage<T extends Entity> {items:T[];nextCursor?:string}
 export interface TenantUsage {kind:string;records:string;metadataBytes:string;objectBytes:string}
+export type ShipmentSearchType='all'|'lr'|'shipment'|'vehicle'|'goods_invoice'|'eway_bill'|'freight_invoice';
+export interface ShipmentSearchQuery {q:string;type?:ShipmentSearchType;match?:'prefix'|'exact';limit?:number;cursor?:string}
+export interface ShipmentSearchItem extends Entity {lrNumber?:string;branch?:string;financialYear?:string;status?:string;originId?:string;destinationId?:string;matches:{type:Exclude<ShipmentSearchType,'all'>;value:string}[];matchesTruncated:boolean}
 export interface MemberIdentity {id:string;membershipId:string;name:string;email:string;verifiedContact?:string;role:Role;organizationId?:string;facilityIds:string[];status:'active'}
 export interface Transaction {
+  searchConsignments(query:ShipmentSearchQuery):Promise<EntityPage<ShipmentSearchItem>>;
   lookupMember(userId:string,role?:Role):Promise<MemberIdentity|undefined>;
   page<T extends Entity>(kind:string,query?:EntityPageQuery):Promise<EntityPage<T>>;
   usage():Promise<TenantUsage[]>;

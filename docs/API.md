@@ -70,3 +70,7 @@ Scheduler configuration retains tenant fallback fields and accepts `siteSchedule
 Large archive downloads stream directly to a supported browser file picker. Other browsers use a bounded 128 MiB fallback and require an approved streaming client for larger files. Export staging has one slot per worker; a failed or expired outbox lease aborts generation. Archived credentials, support/machine/tracking capabilities and OIDC bindings/flows are excluded.
 
 Capability reads accept explicit bounded `limit`/`offset` pagination; see [ACCESS_PAGINATION.md](ACCESS_PAGINATION.md) for ordering, audit scope and snapshot limits.
+
+## Shipment reference search
+
+`GET /v1/search` provides scoped, indexed reference search with keyset result pages and bounded navigation summaries. See [SEARCH.md](SEARCH.md) for parameters, authorization, export boundaries and migration details.
