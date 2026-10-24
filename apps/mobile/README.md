@@ -19,7 +19,7 @@ The Android signing key, package ownership, distribution and rollout approval mu
 
 ## Reproducible native builds and emulator checks
 
-The installed Expo 58 / React Native 0.88 template requires Java 17, Android platform 37, build-tools 37.0.0, NDK 27.1.12297006, target SDK 36 and min SDK 24. The generated wrapper pins Gradle 9.4.1. Install these through the official Android SDK manager and set `ANDROID_HOME`.
+The installed Expo 58 / React Native 0.88 template requires Java 17, Android platform 37.0 (`platforms;android-37.0`), build-tools 37.0.0, NDK 27.1.12297006, target SDK 36 and min SDK 24. CI pins Google's command-line-tools build 15859902. The generated wrapper pins Gradle 9.4.1. Install these through the official Android SDK manager and set `ANDROID_HOME`. Google publishes the API 37 platform with a minor suffix; the build script validates its declared API and creates the local `android-37` compatibility alias required by the pinned native templates, as described in the [upstream runner discussion](https://github.com/actions/runner-images/issues/13859). It does not change SDK contents or compile against a lower API.
 
 ```bash
 # From repository root, after npm ci and dependency-mitigation verification:
