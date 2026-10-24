@@ -3,12 +3,12 @@ export interface SealedReceipt {id:string;version:number;status:string;acceptedA
 const printable=(v:unknown)=>String(v??'Not recorded').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g,'').slice(0,10000);
 /** Only sealed snapshot values enter this renderer; current mutable masters are never consulted. */
 export async function renderReceipt(pod:SealedReceipt):Promise<Buffer>{
- const d=new PDFDocument({size:'A4',margin:44,bufferPages:true,info:{Title:`Proof of delivery ${pod.id}`,Author:'CargoOrbit'}}),chunks:Buffer[]=[];
+ const d=new PDFDocument({size:'A4',margins:{top:44,right:44,bottom:68,left:44},bufferPages:true,info:{Title:`Proof of delivery ${pod.id}`,Author:'CargoOrbit'}}),chunks:Buffer[]=[];
  const complete=new Promise<Buffer>((resolve,reject)=>{d.on('data',c=>chunks.push(c));d.on('end',()=>resolve(Buffer.concat(chunks)));d.on('error',reject)});
  const p=pod.acceptedPayload,navy='#172b45',grey='#52617a';
  const space=(height=45)=>{if(d.y+height>768)d.addPage();};
- const section=(text:string)=>{space(65);d.moveDown(.8).fillColor(navy).font('Helvetica-Bold').fontSize(12).text(text).moveDown(.5);};
- const pair=(key:string,value:unknown)=>{space(38);d.font('Helvetica-Bold').fontSize(8).fillColor(grey).text(key.toUpperCase());d.font('Helvetica').fontSize(10).fillColor(navy).text(printable(value),{width:505}).moveDown(.5);};
+ const section=(text:string)=>{space(65);d.x=44;d.moveDown(.8).fillColor(navy).font('Helvetica-Bold').fontSize(12).text(text,{width:505}).moveDown(.5);};
+ const pair=(key:string,value:unknown)=>{space(38);d.x=44;d.font('Helvetica-Bold').fontSize(8).fillColor(grey).text(key.toUpperCase(),{width:505});d.font('Helvetica').fontSize(10).fillColor(navy).text(printable(value),{width:505}).moveDown(.5);};
  d.fillColor('#087f70').font('Helvetica-Bold').fontSize(25).text('CargoOrbit');d.fillColor(navy).fontSize(20).text(pod.status==='refused'?'Delivery refusal record':'Proof of delivery');d.font('Helvetica').fontSize(10).fillColor(grey).text(`Version ${pod.version} | ${pod.status.replaceAll('_',' ')} | ${pod.acceptedAt}`);
  section('Shipment and receipt identity');pair('LR number',p.lrNumber);pair('POD / attempt',`${pod.id} / ${p.attemptId}`);pair('Receiving facility',p.facilitySnapshot?.name||p.facilityId);pair('Consignor',p.consignorSnapshot?.name||p.consignorId);pair('Consignee',p.consigneeSnapshot?.name||p.consigneeId);pair('Freight payer',p.payerSnapshot?.name||p.payerId);pair('Goods invoice references',(p.invoiceReferences||[]).join(', ')||'Not recorded');
  section('Acknowledged quantities');

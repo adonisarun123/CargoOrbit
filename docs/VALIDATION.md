@@ -5,10 +5,12 @@ This record reports executed checks, not production certification. The requireme
 ## Executed locally
 
 - TypeScript checks across database, domain, API, web and Android source passed.
-- Full regression suite: 164 passed across 20 suites; six hosted PostgreSQL tests skipped because no `TEST_DATABASE_URL` is available locally. Final review regressions cover withholding/credit verification, original-paper custody and replay after receiver revocation. PGlite executes actual PostgreSQL SQL, RLS and triggers for local tests; it does not replace multi-connection server acceptance.
+- Full regression suite: 167 passed across 21 suites; six hosted PostgreSQL tests skipped because no `TEST_DATABASE_URL` is available locally. Final review regressions cover withholding/credit verification, original-paper custody and replay after receiver revocation. PGlite executes actual PostgreSQL SQL, RLS and triggers for local tests; it does not replace multi-connection server acceptance.
 - API/domain/database compilation and optimized Next.js production build passed.
 - Expo package compatibility and mobile TypeScript 6 checks passed. These are source/tooling checks, not a signed Android build or device pass.
 - Scoped deployed API/web production dependency audit: zero vulnerabilities. Patched Zod, Multer and js-yaml dependencies are locked. Full workspace audit remains blocked by one upstream node-forge advisory propagated through four Expo toolchain packages. [Dependency review](../infra/DEPENDENCY_REVIEW.md) records the affected graph and no-patched-version evidence; no advisory is waived.
+- A representative two-page delivery receipt was rendered and visually inspected after correcting post-table text positioning and reserving footer space. This is a layout check, not a general accessibility/Unicode certification.
+- Three credential-free operator command tests check that seed/provisioning entrypoints reach configuration validation without module-format errors.
 - Local export streaming/error cleanup, exact evidence hashes, scanner protocol, PDF generation, reminder shifts/reversals, callback replay, sessions/contact/invitations, receiver/policy/correction/finance workflows, warehouse/provider boundaries and mobile queue/session regressions are exercised by tests.
 - Production readiness command fails without actual production environment/acceptance evidence, as intended. Operator script syntax and CI YAML checks pass.
 

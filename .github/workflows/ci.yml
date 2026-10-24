@@ -38,6 +38,8 @@ jobs:
       - run: npm ci
       - run: npm run build -w @cargoorbit/database
       - run: npm run build -w @cargoorbit/domain
+      - name: Operator entrypoints reject missing credentials before provisioning
+        run: npx vitest run tests/operator-entrypoints.test.ts
       - run: npm run db:migrate
       - name: Verify migration checksums and repeat execution
         run: npm run db:migrate

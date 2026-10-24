@@ -7,7 +7,7 @@ const pool=new Pool({connectionString:url});
 try {
   // The role name is deliberately fixed. PostgreSQL role passwords do not accept bind parameters.
   // Server-side format(%L) quotes the secret; the SQL result is never printed.
-  const {rows}=await pool.query('SELECT format(\'CREATE ROLE cargoorbit_runtime LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS\',$1)',[password]);
+  const {rows}=await pool.query('SELECT format(\'CREATE ROLE cargoorbit_runtime LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS\',$1::text)',[password]);
   const exists=await pool.query("SELECT 1 FROM pg_roles WHERE rolname='cargoorbit_runtime'");
   if(exists.rowCount) throw new Error('cargoorbit_runtime already exists; rotate its credential through your database operator');
   await pool.query(rows[0].format);
