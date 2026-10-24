@@ -4,9 +4,9 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
-    "dev": "expo start --dev-client",
-    "android": "expo run:android",
-    "build:android": "eas build --platform android --profile production",
+    "dev": "node security/forge-mitigation.cjs --verify && expo start --dev-client",
+    "android": "node security/forge-mitigation.cjs --verify && expo run:android",
+    "build:android": "bash scripts/build-android.sh bundleRelease",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

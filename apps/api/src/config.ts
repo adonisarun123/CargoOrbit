@@ -12,3 +12,5 @@ if(config.mfaEncryptionKey&&!/^[a-f0-9]{64}$/i.test(config.mfaEncryptionKey))thr
 if(config.trustProxy.some(v=>v==='*'||v==='true'||/^\d+$/.test(v)))throw new Error('TRUST_PROXY_CIDRS requires explicit proxy addresses or CIDRs, not wildcard/hop counts');
 if(production&&config.storage!=='s3')throw new Error('Production requires private versioned S3 evidence storage');
 if(production&&(!config.bucket||config.scanner!=='clamav'||!config.smsUrl||!config.smsToken||!config.mfaEncryptionKey))throw new Error('Production requires S3, ClamAV, OTP adapter and MFA encryption configuration');
+
+if(process.env.APP_PUBLIC_URL&&validateOrigins(process.env.APP_PUBLIC_URL,production).length!==1)throw new Error('APP_PUBLIC_URL must contain exactly one origin');

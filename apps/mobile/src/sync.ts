@@ -1,5 +1,5 @@
 import {ApiError} from './session-client';
-import {errorMessage,retryAt,shouldRetry} from './policy';
+import {errorMessage,retryAt,shouldRetry,MAX_AUTOMATIC_ATTEMPTS} from './policy';
 import type {Operation,QueuePort} from './types';
 export interface SyncTransport {postAction(action:string,input:unknown,operationId:string):Promise<Record<string,unknown>>;uploadPhoto(operation:Operation,base64:string):Promise<Record<string,unknown>>;}
 export interface SyncResult {uploaded:number;failed:number;held:number;authenticationRequired:boolean;}
@@ -16,7 +16,7 @@ export class SyncEngine {
  }
  private async run(onProgress:(()=>void)|undefined,manual:boolean):Promise<SyncResult>{
   const result:SyncResult={uploaded:0,failed:0,held:0,authenticationRequired:false};
-  const all=await this.queue.list();result.held=all.filter(op=>op.state!=='synchronized'&&!op.retryable).length;
+  const all=await this.queue.list();result.held=all.filter(op=>!op.replacedBy&&op.state!=='synchronized'&&!op.retryable).length;
   const items=all.filter(op=>shouldRetry(op,this.now(),manual)).sort((a,b)=>(a.kind==='photo'?0:1)-(b.kind==='photo'?0:1)||a.createdAt.localeCompare(b.createdAt));
   for(const op of items){if(this.stopped)break;try{
    await this.queue.markUploading(op.id);onProgress?.();let response:Record<string,unknown>;
@@ -24,7 +24,7 @@ export class SyncEngine {
    else {const payload=structuredClone(op.payload);if(op.kind==='draft'){
     const photoIds=Array.isArray(payload.photoOperationIds)?payload.photoOperationIds as string[]:[];
     const evidenceIds=Array.isArray(payload.evidenceIds)?[...payload.evidenceIds] as string[]:[];
-    for(const id of photoIds){const photo=await this.queue.get(id);if(!photo||photo.kind!=='photo'||photo.consignmentId!==op.consignmentId)throw new ApiError(409,'Linked photo does not belong to this receipt. Operations must review it.','PHOTO_SCOPE');if(photo.state!=='synchronized'||!photo.serverId){if(photo.retryable===false)throw new ApiError(409,'A linked photo needs operations review.','PHOTO_HELD');throw new Error('Linked photo is awaiting synchronization.');}evidenceIds.push(photo.serverId);}
+    for(const id of photoIds){const photo=await this.queue.get(id);if(!photo||photo.kind!=='photo'||photo.consignmentId!==op.consignmentId||typeof op.payload.attemptId==='string'&&photo.payload.attemptId!==op.payload.attemptId)throw new ApiError(409,'Linked photo does not belong to this receipt. Operations must review it.','PHOTO_SCOPE');if(photo.state!=='synchronized'||!photo.serverId){if(photo.retryable===false)throw new ApiError(409,'A linked photo needs operations review.','PHOTO_HELD');throw new Error('Linked photo is awaiting synchronization.');}evidenceIds.push(photo.serverId);}
     delete payload.photoOperationIds;payload.evidenceIds=[...new Set(evidenceIds)];
    }response=await this.transport.postAction(op.kind==='event'?'recordEvent':'saveDraft',payload,op.id);}
    const entity=typeof response.evidence==='object'&&response.evidence?response.evidence as Record<string,unknown>:response;
@@ -34,9 +34,18 @@ export class SyncEngine {
    const denied=error instanceof ApiError&&[400,403,404,409,410,413,415,422].includes(error.status);
    const authentication=error instanceof ApiError&&error.status===401;
    const message=denied?`${errorMessage(error)} Retained on device for operations review; automatic retry stopped.`:errorMessage(error);
-   await this.queue.markFailed(op.id,message,{retryable:!denied,nextAttemptAt:denied?null:retryAt(op.attempts+1,this.now())});result.failed++;
+   await this.queue.markFailed(op.id,message,{retryable:!denied,nextAttemptAt:denied?null:retryAt(op.attempts+1,this.now()),errorCode:error instanceof ApiError?error.code||`HTTP_${error.status}`:'NETWORK_OR_STORAGE'});result.failed++;
    if(denied)result.held++;if(authentication){result.authenticationRequired=true;break;}
   }finally{onProgress?.();}}
+  if(!this.stopped&&!result.authenticationRequired&&this.queue.listEscalations&&this.queue.markEscalation){
+   for(const escalation of await this.queue.listEscalations()){
+    if(this.stopped)break;
+    if(escalation.state==='synchronized'||!escalation.retryable||!manual&&(escalation.attempts>=MAX_AUTOMATIC_ATTEMPTS||!!escalation.nextAttemptAt&&Date.parse(escalation.nextAttemptAt)>this.now()))continue;
+    try{const response=await this.transport.postAction('createSyncEscalation',escalation.payload,escalation.id);const id=typeof response.taskId==='string'?response.taskId:response.id;if(typeof id!=='string'||!id)throw new Error('Server did not acknowledge the review request.');await this.queue.markEscalation(escalation.id,{serverId:id});}
+    catch(error){const denied=error instanceof ApiError&&[400,403,404,409,410,413,415,422].includes(error.status);await this.queue.markEscalation(escalation.id,{error:errorMessage(error),retryable:!denied,nextAttemptAt:denied?null:retryAt(escalation.attempts+1,this.now())});if(error instanceof ApiError&&error.status===401){result.authenticationRequired=true;break;}}
+    finally{onProgress?.();}
+   }
+  }
   return result;
  }
 }

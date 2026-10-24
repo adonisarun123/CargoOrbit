@@ -54,7 +54,14 @@ export interface EntityQuery {
   limit?: number;
   offset?: number;
 }
+export interface EntityPageQuery {where?:Record<string,unknown>;before?:{field:string;value:string};limit?:number;cursor?:string}
+export interface EntityPage<T extends Entity> {items:T[];nextCursor?:string}
+export interface TenantUsage {kind:string;records:string;metadataBytes:string;objectBytes:string}
+export interface MemberIdentity {id:string;membershipId:string;name:string;email:string;verifiedContact?:string;role:Role;organizationId?:string;facilityIds:string[];status:'active'}
 export interface Transaction {
+  lookupMember(userId:string,role?:Role):Promise<MemberIdentity|undefined>;
+  page<T extends Entity>(kind:string,query?:EntityPageQuery):Promise<EntityPage<T>>;
+  usage():Promise<TenantUsage[]>;
   find<T extends Entity>(kind:string,query?:EntityQuery):Promise<T[]>;
   count(kind:string,where?:Record<string,unknown>):Promise<number>;
   get<T extends Entity>(kind: string, id: string): Promise<T | undefined>;

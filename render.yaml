@@ -1,0 +1,328 @@
+# REVIEW ONLY: paid resources. Requires approved workspace, Singapore region, costs, secrets and release evidence.
+# Supply restricted runtime DATABASE_URL after provisioning; never wire owner connectionString into services.
+services:
+- type: web
+  name: cargoorbit-api
+  runtime: docker
+  repo: https://github.com/adonisarun123/CargoOrbit
+  branch: main
+  region: singapore
+  plan: 0.5c-512mb
+  numInstances: 1
+  autoDeployTrigger: 'off'
+  dockerfilePath: ./Dockerfile
+  dockerContext: .
+  dockerCommand: node apps/api/dist/main.js
+  healthCheckPath: /v1/health/ready
+  envVars:
+  - key: NODE_ENV
+    value: production
+  - key: PORT
+    value: '4000'
+  - key: EVIDENCE_STORAGE
+    value: s3
+  - key: MALWARE_SCANNER
+    value: clamav
+  - key: CLAMAV_PORT
+    value: '3310'
+  - key: DB_POOL_SIZE
+    value: '10'
+  - key: DB_STATEMENT_TIMEOUT_MS
+    value: '30000'
+  - key: DB_LOCK_TIMEOUT_MS
+    value: '10000'
+  - key: EXPORT_MAX_BYTES
+    value: '5368709120'
+  - key: EXPORT_MAX_SECONDS
+    value: '1800'
+  - key: EXPORT_MAX_MEMBERS
+    value: '100000'
+  - key: INTEGRATION_CONFIG_JSON
+    value: '[]'
+  - key: OIDC_CONFIG_JSON
+    value: '[]'
+  - key: DATABASE_URL
+    sync: false
+  - key: JWT_SECRET
+    generateValue: true
+  - key: OTP_SECRET
+    generateValue: true
+  - key: MFA_ENCRYPTION_KEY
+    sync: false
+  - key: WEB_ORIGIN
+    sync: false
+  - key: NEXT_PUBLIC_API_URL
+    sync: false
+  - key: S3_BUCKET
+    sync: false
+  - key: AWS_REGION
+    sync: false
+  - key: AWS_ACCESS_KEY_ID
+    sync: false
+  - key: AWS_SECRET_ACCESS_KEY
+    sync: false
+  - key: SMS_WEBHOOK_URL
+    sync: false
+  - key: SMS_WEBHOOK_TOKEN
+    sync: false
+  - key: NOTIFICATION_WEBHOOK_URL
+    sync: false
+  - key: NOTIFICATION_WEBHOOK_TOKEN
+    sync: false
+  - key: NOTIFICATION_CALLBACK_SECRET
+    generateValue: true
+  - key: INVITATION_WEBHOOK_URL
+    sync: false
+  - key: INVITATION_WEBHOOK_TOKEN
+    sync: false
+  - key: TRUST_PROXY_CIDRS
+    sync: false
+  - key: CLAMAV_HOST
+    fromService:
+      type: pserv
+      name: cargoorbit-clamav
+      property: host
+  - key: APP_PUBLIC_URL
+    sync: false
+  - key: WORKER_CONCURRENCY
+    value: '4'
+- type: web
+  name: cargoorbit-web
+  runtime: docker
+  repo: https://github.com/adonisarun123/CargoOrbit
+  branch: main
+  region: singapore
+  plan: 0.5c-512mb
+  numInstances: 1
+  autoDeployTrigger: 'off'
+  dockerfilePath: ./Dockerfile
+  dockerContext: .
+  dockerCommand: npm run start --workspace=@cargoorbit/web
+  healthCheckPath: /
+  envVars:
+  - key: NODE_ENV
+    value: production
+  - key: PORT
+    value: '3000'
+  - key: NEXT_TELEMETRY_DISABLED
+    value: '1'
+  - key: NEXT_PUBLIC_API_URL
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: NEXT_PUBLIC_API_URL
+- type: worker
+  name: cargoorbit-worker
+  runtime: docker
+  repo: https://github.com/adonisarun123/CargoOrbit
+  branch: main
+  region: singapore
+  plan: 0.5c-512mb
+  numInstances: 1
+  autoDeployTrigger: 'off'
+  dockerfilePath: ./Dockerfile
+  dockerContext: .
+  dockerCommand: node apps/api/dist/worker.js
+  disk:
+    name: export-staging
+    mountPath: /var/lib/cargoorbit-export
+    sizeGB: 10
+  envVars:
+  - key: NODE_ENV
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: NODE_ENV
+  - key: PORT
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: PORT
+  - key: EVIDENCE_STORAGE
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: EVIDENCE_STORAGE
+  - key: MALWARE_SCANNER
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: MALWARE_SCANNER
+  - key: CLAMAV_PORT
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: CLAMAV_PORT
+  - key: DB_POOL_SIZE
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: DB_POOL_SIZE
+  - key: DB_STATEMENT_TIMEOUT_MS
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: DB_STATEMENT_TIMEOUT_MS
+  - key: DB_LOCK_TIMEOUT_MS
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: DB_LOCK_TIMEOUT_MS
+  - key: EXPORT_MAX_BYTES
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: EXPORT_MAX_BYTES
+  - key: EXPORT_MAX_SECONDS
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: EXPORT_MAX_SECONDS
+  - key: EXPORT_MAX_MEMBERS
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: EXPORT_MAX_MEMBERS
+  - key: INTEGRATION_CONFIG_JSON
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: INTEGRATION_CONFIG_JSON
+  - key: OIDC_CONFIG_JSON
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: OIDC_CONFIG_JSON
+  - key: DATABASE_URL
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: DATABASE_URL
+  - key: JWT_SECRET
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: JWT_SECRET
+  - key: OTP_SECRET
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: OTP_SECRET
+  - key: MFA_ENCRYPTION_KEY
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: MFA_ENCRYPTION_KEY
+  - key: WEB_ORIGIN
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: WEB_ORIGIN
+  - key: NEXT_PUBLIC_API_URL
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: NEXT_PUBLIC_API_URL
+  - key: S3_BUCKET
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: S3_BUCKET
+  - key: AWS_REGION
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: AWS_REGION
+  - key: AWS_ACCESS_KEY_ID
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: AWS_ACCESS_KEY_ID
+  - key: AWS_SECRET_ACCESS_KEY
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: AWS_SECRET_ACCESS_KEY
+  - key: SMS_WEBHOOK_URL
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: SMS_WEBHOOK_URL
+  - key: SMS_WEBHOOK_TOKEN
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: SMS_WEBHOOK_TOKEN
+  - key: NOTIFICATION_WEBHOOK_URL
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: NOTIFICATION_WEBHOOK_URL
+  - key: NOTIFICATION_WEBHOOK_TOKEN
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: NOTIFICATION_WEBHOOK_TOKEN
+  - key: NOTIFICATION_CALLBACK_SECRET
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: NOTIFICATION_CALLBACK_SECRET
+  - key: INVITATION_WEBHOOK_URL
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: INVITATION_WEBHOOK_URL
+  - key: INVITATION_WEBHOOK_TOKEN
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: INVITATION_WEBHOOK_TOKEN
+  - key: TRUST_PROXY_CIDRS
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: TRUST_PROXY_CIDRS
+  - key: CLAMAV_HOST
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: CLAMAV_HOST
+  - key: TMPDIR
+    value: /var/lib/cargoorbit-export
+  - key: APP_PUBLIC_URL
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: APP_PUBLIC_URL
+  - key: WORKER_CONCURRENCY
+    fromService:
+      type: web
+      name: cargoorbit-api
+      envVarKey: WORKER_CONCURRENCY
+- type: pserv
+  name: cargoorbit-clamav
+  runtime: image
+  image:
+    url: docker.io/clamav/clamav:1.4.6@sha256:3bba6dd5ac6663d55b80f86a3126e146612d93b593cc2617188d13f637d91260
+  region: singapore
+  plan: 2c-4g
+  numInstances: 1
+  autoDeployTrigger: 'off'
+  disk:
+    name: clamav-signatures
+    mountPath: /var/lib/clamav
+    sizeGB: 5
+  envVars:
+  - key: CLAMAV_NO_FRESHCLAMD
+    value: 'false'
+databases:
+- name: cargoorbit-postgres
+  region: singapore
+  plan: 0.1c-256mb
+  databaseName: cargoorbit
+  user: cargoorbit_owner
+  postgresMajorVersion: '17'
+  diskSizeGB: 5
+  storageAutoscalingEnabled: false
+  ipAllowList: []

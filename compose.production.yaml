@@ -22,6 +22,9 @@ x-api-environment: &api-environment
   OTP_SECRET: ${OTP_SECRET:?Set OTP secret}
   MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?Set 64 hex character MFA encryption key}
   WEB_ORIGIN: https://${APP_DOMAIN:?Set approved public hostname}
+  APP_PUBLIC_URL: https://${APP_DOMAIN:?Set approved public hostname}
+  OIDC_CONFIG_JSON: ${OIDC_CONFIG_JSON:-[]}
+  WORKER_CONCURRENCY: '4'
   EVIDENCE_STORAGE: s3
   AWS_REGION: ${AWS_REGION:-ap-south-1}
   S3_BUCKET: ${S3_BUCKET:?Set private versioned evidence bucket}
@@ -60,7 +63,10 @@ services:
   worker:
     <<: *app
     command: [node, apps/api/dist/worker.js]
-    environment: *api-environment
+    environment:
+      <<: *api-environment
+      TMPDIR: /var/lib/cargoorbit-export
+    volumes: [export-staging:/var/lib/cargoorbit-export]
     depends_on:
       api: {condition: service_healthy}
   web:
@@ -102,6 +108,7 @@ services:
 networks:
   application:
 volumes:
+  export-staging:
   clam-signatures:
   caddy-data:
   caddy-config:

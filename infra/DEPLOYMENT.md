@@ -23,3 +23,7 @@ Use `scripts/release-readiness.mjs` to check required configuration and the oper
 Provider sandbox contract tests, real Android device tests, independent security assessment, browser accessibility/end-to-end results, restored objects and measured load test outcomes must be supplied before launch. Region selection, sender/DLT approval, customer finance acceptance, security ownership and incident contacts are business/operational dependencies that cannot be fabricated by code.
 
 Provider gateway credentials are named by `INTEGRATION_CONFIG_JSON`. Explicitly map each approved `CARGO_PROVIDER_*` secret into the API container through your secret manager; never mount an operator environment containing migration or enrollment credentials. Configure `TRUST_PROXY_CIDRS` for the actual trusted proxy network before enforcing public IP rate limits. The notification callback uses its own distinct HMAC secret.
+
+## Additional launch procedures
+
+See `infra/RENDER.md` for the review-only managed hosting proposal and cost/credential boundary, `infra/VALIDATION.md` for executable browser/native/load/recovery checks and their limits, and `infra/RETENTION.md` for dry-run-first two-person closure/deletion execution. No cloud resources or tenant deletion were executed during development.

@@ -1,5 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import type {Session,Consignment,Attempt,Pod,Operation,WorkSnapshot} from './types';
+import type {Session,Consignment,Attempt,Pod,Operation,WorkSnapshot,BarcodeMapping} from './types';
 import {ApiError,SessionClient,type RawRequest} from './session-client';
 export {ApiError,SessionClient} from './session-client';
 export const API_URL=(process.env.EXPO_PUBLIC_API_URL||'http://10.0.2.2:4000/v1').replace(/\/$/,'');
@@ -17,8 +17,8 @@ export function login(email:string,password:string,otp?:string,membershipId?:str
 async function pages<T>(client:SessionClient,resource:string):Promise<T[]>{const result:T[]=[];for(let offset=0;offset<10000;offset+=200){const value=await client.request<T[]|{items:T[]}>(`/resources/${resource}?limit=200&offset=${offset}`);const rows=Array.isArray(value)?value:value.items;if(!Array.isArray(rows))throw new Error('Server assignment response was invalid.');result.push(...rows);if(rows.length<200)return result;}throw new Error('Assignment list exceeds device capacity. Operations must reduce active assignments.');}
 export async function assignedWork(client:SessionClient):Promise<WorkSnapshot>{
  // Fetch concurrently but share a serialized refresh coordinator.
- const [consignments,attempts,pods]=await Promise.all([pages<Consignment>(client,'consignments'),pages<Attempt>(client,'attempts'),pages<Pod>(client,'pods')]);
- return {consignments,attempts,pods,fetchedAt:new Date().toISOString()};
+ const [consignments,attempts,pods,barcodes]=await Promise.all([pages<Consignment>(client,'consignments'),pages<Attempt>(client,'attempts'),pages<Pod>(client,'pods'),pages<BarcodeMapping>(client,'barcodes')]);
+ return {consignments,attempts,pods,barcodes,fetchedAt:new Date().toISOString()};
 }
 export function transport(client:SessionClient){return {postAction:(action:string,input:unknown,operationId:string)=>client.request<Record<string,unknown>>(`/actions/${action}`,input,operationId),uploadPhoto:(op:Operation,base64:string)=>uploadPhoto(client,op,base64)};}
 /** Remove only CargoOrbit-created temporary upload files left by an interrupted process. */

@@ -48,3 +48,23 @@ Receipt acceptance is transaction-bound and checks active membership, receiver g
 Delivery callbacks go to `POST /provider-callbacks/notifications/:tenantId` with JSON `{notificationId,providerReference,eventId,status,occurredAt}`; status is delivered or failed. Set `X-Cargoorbit-Timestamp` to Unix seconds and `X-Cargoorbit-Signature` to lowercase hex HMAC-SHA256 over the exact UTF-8 prefix `<tenantId>.<timestamp>.` followed by the raw request bytes, using `NOTIFICATION_CALLBACK_SECRET`. The server allows five minutes of skew, validates the provider reference, rejects conflicting event replays and prevents late failures from regressing delivered status.
 
 Do not log OTPs, invitation tokens, authorization headers, credentials or raw provider bodies. Callback authenticity does not by itself certify the provider's underlying delivery claim.
+
+## Release operations
+
+Operations requests use the existing bearer session and current tenant membership. Owner-only configuration/export/retention writes require `X-Step-Up` with `policy:change`.
+
+| Route | Contract |
+|---|---|
+| `GET /v1/operations/task-pages?source=tasks&cursor=…` | `source` is `tasks`, `scheduled_tasks` or `ops_tasks`; returns `{items,nextCursor?}`, each item includes source/id/version/sourceStatus/status/ageMinutes. Cursors bind tenant, source and filter. |
+| `POST /v1/operations/tasks` | Manual task: title, description, ownerRole, optional assigneeId, dueAt, priority, reference. |
+| `POST /v1/operations/tasks/:source/:id/transition` | expectedVersion, optional assigneeId/dueAt/priority/status, reason. Only manual tasks accept status changes; generated tasks close through their source workflows. |
+| `GET /v1/operations/inbox-page?cursor=…` | Current user's notification page. `POST /inbox/:id/read` acknowledges only that user's record. |
+| `GET /v1/operations/usage` | Owner/auditor per-kind record count, JSON metadata bytes and registered object bytes. Values are decimal strings. |
+| `POST /v1/operations/exports` | Owner queues `{reason}`; one outstanding export per tenant. |
+| `GET /v1/operations/exports` | Latest bounded job inventory without object keys, versions or internal run tokens. |
+| `GET /v1/operations/exports/:id/download` | Owner step-up; immutable version-addressed gzip stream with `X-Archive-SHA256` and `X-Archive-Bytes`. A missing final HTTP chunk means incomplete/failed transfer. Independently hash the downloaded file before acknowledging. |
+| `POST /v1/operations/exports/:id/acknowledge` | Owner step-up with independently checked sha256 and receiptReference. Hash must match. This is an explicit receipt acknowledgment, not automatic proof of a restore. |
+
+Scheduler configuration retains tenant fallback fields and accepts `siteSchedules`. Each facility schedule has id, facilityId, IANA timeZone, weekdays, startHour/endHour, holidays, channel/contact, optional ewayOffsetsMinutes and escalationTiers (`afterMinutes`, `channel`, `contact`, `ownerRole`). Overnight shifts belong to their local start date; holidays on either date prevent sending. Configuration versions and current source state are checked before provider delivery. E-way reminders never change official validity.
+
+Large archive downloads stream directly to a supported browser file picker. Other browsers use a bounded 128 MiB fallback and require an approved streaming client for larger files. Export staging has one slot per worker; a failed or expired outbox lease aborts generation. Archived credentials, support/machine/tracking capabilities and OIDC bindings/flows are excluded.

@@ -31,6 +31,21 @@ export async function downloadAuthorized(token:string,path:string,filename:strin
  const response=await authorizedFetch(path,token,{headers});if(!response.ok){const err=await response.json().catch(()=>({}));throw new ApiError(response.status,err.message||'This download is not available.')}
  const url=URL.createObjectURL(await response.blob());const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+// Acquire the destination directly from the user's click before step-up/network awaits.
+export async function archiveDestination(filename:string):Promise<FileSystemFileHandle|null>{
+ const picker=(window as any).showSaveFilePicker;if(!picker)return null;
+ return picker({suggestedName:filename,types:[{description:'Workspace archive',accept:{'application/gzip':['.gz']}}]});
+}
+export async function downloadArchive(token:string,path:string,filename:string,headers:Record<string,string>,destination:FileSystemFileHandle|null,expectedHash?:string){
+ const response=await authorizedFetch(path,token,{headers});if(!response.ok){const err=await response.json().catch(()=>({}));throw new ApiError(response.status,err.message||'This archive is not available.')}
+ if(expectedHash&&response.headers.get('X-Archive-SHA256')!==expectedHash){await response.body?.cancel();throw new Error('The archive checksum header differs from the reviewed export. Refresh and investigate before downloading.')}
+ if(!response.body)throw new Error('The archive stream is unavailable.');
+ const length=response.headers.get('X-Archive-Bytes');
+ if(destination){const writable=await destination.createWritable();let bytes=0;const counted=new TransformStream<Uint8Array,Uint8Array>({transform(chunk,controller){bytes+=chunk.byteLength;controller.enqueue(chunk)},flush(){if(length&&bytes!==Number(length))throw new Error('The archive stream ended before all bytes arrived. Download it again.')}});await response.body.pipeThrough(counted).pipeTo(writable);return}
+ const limit=128*1024*1024;if(length&&Number(length)>limit){await response.body.cancel();throw new Error('This browser cannot stream this archive to disk. Use a browser with the file save picker for archives over 128 MiB.')}
+ const reader=response.body.getReader(),chunks:Uint8Array<ArrayBuffer>[]=[];let total=0;
+ try{for(;;){const {value,done}=await reader.read();if(done)break;total+=value.byteLength;if(total>limit){await reader.cancel();throw new Error('Archive exceeds this browser’s 128 MiB download limit. Use a browser with the file save picker.')}chunks.push(value as Uint8Array<ArrayBuffer>)}if(length&&total!==Number(length))throw new Error('The archive stream ended before all bytes arrived. Download it again.');const url=URL.createObjectURL(new Blob(chunks,{type:'application/gzip'}));const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}finally{reader.releaseLock()}
+}
 export const currency=(value:unknown)=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(value)||0);
 export const number=(value:unknown)=>new Intl.NumberFormat('en-IN').format(Number(value)||0);
 export function date(value:unknown,full=false){if(!value)return 'Not recorded';const d=new Date(String(value));return Number.isNaN(d.getTime())?'Not recorded':new Intl.DateTimeFormat('en-IN',{day:'2-digit',month:'short',...(full?{year:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'}:{}),timeZone:'Asia/Kolkata'}).format(d)}

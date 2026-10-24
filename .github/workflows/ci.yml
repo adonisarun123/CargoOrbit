@@ -11,7 +11,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:17-alpine
@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: 24, cache: npm}
       - run: npm ci
+      - name: Verify pinned mobile security mitigation and crypto compatibility
+        run: npm run security:forge
       - run: npm run build -w @cargoorbit/database
       - run: npm run build -w @cargoorbit/domain
       - name: Operator entrypoints reject missing credentials before provisioning
@@ -48,6 +50,41 @@ jobs:
       - name: Unit and real PostgreSQL integration tests
         run: npm test
       - run: npm run build
+      - name: Rehearse snapshot, isolated restore, object checksum, and application read
+        run: node scripts/recovery-rehearsal.mjs
+        env:
+          RECOVERY_DRILL_DATABASE_URL: postgresql://postgres:test-migration-password@localhost:5432/cargoorbit_test
+          RECOVERY_DRILL_EXECUTE: isolated-fixtures
+          POSTGRES_CLIENT_IMAGE: postgres:17-alpine
+          RECOVERY_DRILL_REPORT: test-results/recovery-rehearsal.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: measured-recovery-rehearsal
+          path: test-results/recovery-rehearsal.json
+          if-no-files-found: warn
+      - name: Install browser test runtime
+        run: npx playwright install --with-deps chromium
+      - name: Seed isolated browser acceptance tenants
+        run: npx tsx apps/web/e2e/seed.mts
+        env:
+          NODE_ENV: test
+          CARGOORBIT_E2E: '1'
+          E2E_PASSWORD: ci-browser-only-password-123
+      - name: Browser acceptance against real API, worker, and PostgreSQL
+        run: npx playwright test --config=apps/web/playwright.config.ts
+        env:
+          E2E_PASSWORD: ci-browser-only-password-123
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-acceptance-results
+          path: |
+            playwright-report/
+            test-results/browser/
+            test-results/browser-junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Native dependency compatibility
         run: npx expo install --check
         working-directory: apps/mobile
@@ -56,6 +93,8 @@ jobs:
           node --check scripts/backup-database.mjs
           node --check scripts/restore-drill.mjs
           node --check scripts/release-readiness.mjs
+          node --check scripts/load-test.mjs
+          node --check scripts/retention-execute.mjs
       - name: Require unresolved production gates to fail closed
         run: |
           if node scripts/release-readiness.mjs > /tmp/cargoorbit-readiness.json; then
@@ -82,7 +121,7 @@ jobs:
       - name: Root build and API/web development dependency vulnerability gate
         run: npm audit --audit-level=high --workspace=@cargoorbit/api --workspace=@cargoorbit/web --include-workspace-root
   mobile-toolchain-security:
-    name: Mobile toolchain security (release blocker until upstream patch)
+    name: Mobile raw advisory audit (upstream unresolved)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -90,8 +129,21 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: 24, cache: npm}
       - run: npm ci --ignore-scripts
+      - name: Apply and verify reviewed candidate independently of raw audit
+        run: |
+          node apps/mobile/security/forge-mitigation.cjs --apply
+          npm run security:forge
       - name: Full production workspace audit; no advisory waivers
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --omit=dev --audit-level=high --json > mobile-raw-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-raw-audit-and-mitigation
+          path: |
+            mobile-raw-audit.json
+            apps/mobile/security/forge-mitigation.json
+            docs/ANDROID_SECURITY_REVIEW.md
+          if-no-files-found: error
   container:
     runs-on: ubuntu-latest
     timeout-minutes: 25

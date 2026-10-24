@@ -1,3 +1,4 @@
+import {applyFixtureMigrations} from './database-fixture.js';
 import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
 import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
@@ -9,7 +10,7 @@ const password='Correct-long-password-42',secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQO
 const login=()=>auth.login({email:'owner@example.test',password},'127.0.0.1');
 beforeAll(async()=>{
  process.env.JWT_SECRET='a'.repeat(40);process.env.OTP_SECRET='b'.repeat(40);process.env.NODE_ENV='test';
- pg=new PGlite();await pg.exec(await readFile(new URL('../packages/database/src/001_initial.sql',import.meta.url),'utf8'));await pg.exec(await readFile(new URL('../packages/database/src/002_release_hardening.sql',import.meta.url),'utf8'));
+ pg=new PGlite();await applyFixtureMigrations(pg);
  const {AuthService}=await import('../apps/api/src/auth');
  const query=async(sql:string,args?:unknown[])=>{const result=await pg.query(sql,args);return {...result,rowCount:result.affectedRows||result.rows.length};};
  auth=new AuthService({pool:{query,connect:async()=>({query,release(){}})}} as any);

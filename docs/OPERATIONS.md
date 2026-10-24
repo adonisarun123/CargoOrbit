@@ -64,7 +64,7 @@ Check body/upload limits at the reverse proxy as well as API limits. Avoid loggi
 
 The queue separates tenant/user accounts and fails closed if the native SQLCipher capability is unavailable. It tracks up to 100 metadata drafts and a 300 MiB media budget with an 80% warning; photos have a separate size bound. Assignments older than 24 hours block new capture pending refresh, while existing queued work remains available for recovery.
 
-Queue states distinguish local persistence from server receipt. Transient failures receive bounded retry; stale, forbidden or invalid work is held for review. Manual retry does not override authority, state conflicts or content validation. Do not clear app data, uninstall or delete a queue to make an error disappear while unsynchronized evidence remains.
+Queue states distinguish local persistence from server receipt. Transient failures receive bounded retry; stale, forbidden or invalid work is held for review. Failed drafts have an explicit server comparison, a five-minute freshness limit and a reasoned replacement that preserves the original payload/hash and evidence links. Finalized or reassigned attempts cannot be replaced. Metadata-only escalation is durably queued offline and shown as synchronized only after the server acknowledges a task; a revoked assignment may also deny escalation, requiring authorized operations to review the retained device capture. Manual retry does not override authority, state conflicts or content validation. Do not clear app data, uninstall or delete a queue to make an error disappear while unsynchronized evidence remains.
 
 Sign-out waits for in-flight queue work and separates accounts. Reauthenticate the same authorized account to recover its pending work. Test revocation and account switching with live uploads, camera capture and refresh in progress. Background/terminated operation is not represented as uninterrupted background synchronization.
 
@@ -90,7 +90,7 @@ Legal holds and retention requests require tenant authority; a different authori
 
 Closing stops new business processing; closed blocks application transactions. Coordinate the export window before closing access. Tenant status transition and disposal need a separately controlled operator procedure. Immutable database triggers are not a retention implementation and must not be casually disabled. Track approved exceptions and preserve the maintenance audit.
 
-Review provider redistribution restrictions before a full archive. General exports must not disclose restricted raw data beyond the approved tenant purpose. Database/cloud administrators remain privileged outside normal application controls and need independently controlled/audited access.
+Raw integration-call results are excluded from the general archive. A separate provider-data export requires an explicitly approved dataset/redistribution policy. Database/cloud administrators remain privileged outside normal application controls and need independently controlled/audited access.
 
 ## Required release evidence
 
@@ -107,3 +107,11 @@ Review provider redistribution restrictions before a full archive. General expor
 | Operations | Named on-call owner, dependency/queue/provider alerts, correlation trace, rollback plan, incident exercise and acknowledged residual gaps. |
 
 Execute the SRS acceptance scenarios against the final release candidate. Record passes, failures and untested cases individually. The customer UAT and external operator gates cannot be replaced with a blanket “production ready” label.
+
+## Background exports and task operations
+
+Owner export requests run through durable outbox jobs. Allocate an encrypted staging volume with at least the configured archive budget plus 256 MiB free; the reference deployment gives the worker a dedicated directory. Only one export runs per worker, while other slots process evidence and notifications. Worker startup removes only abandoned `cargoorbit-export-*` directories older than 24 hours. The process aborts generation when its outbox lease cannot renew; a run token prevents a replaced attempt from publishing or resetting another attempt's result.
+
+Downloads address the exact stored version, verify SHA-256 while streaming and expire after seven days. Access expiry does not delete the source archive or satisfy retention disposal. The owner must compute the downloaded file hash and record a matching receipt reference before closure. The operator retention executor separately reconciles each exact object version and approved backup disposal. No cleanup or retention execution has been performed on real tenant data in this development session.
+
+Task boards expose source-controlled generated tasks and separately editable manual tasks. Due dates, priority and role-matched assignments use expected-version checks and append history; financial/source closure cannot be bypassed with a task transition. Review tenant/site staffed schedules, overnight holidays, escalation contacts and fallback finance ownership with the actual operations team before enabling notifications.

@@ -1,0 +1,1 @@
+export type BrowserFixture={tenantId:string;secondaryTenantId:string;primaryMembershipId:string;secondaryMembershipId:string;senderId:string;customerId:string;originId:string;destinationId:string;receiverGrantId:string;revocationGrantId:string;revocationConsignmentId:string;revocationPodId:string;users:Record<string,{id:string;email:string;name:string;membershipId:string}>};

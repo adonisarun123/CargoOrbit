@@ -13,10 +13,11 @@ const dump=join(output,`${name}.dump`),partial=`${dump}.partial`,manifest=join(o
 const pool=new pg.Pool({connectionString:url,max:1}),client=await pool.connect();
 try{
  await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+ const operator=(await client.query("SELECT pg_has_role(current_user,'cargoorbit_operator','MEMBER') authorized")).rows[0];if(!operator?.authorized)throw new Error('Backup requires the separately authorized operator role');
  const snapshot=(await client.query('SELECT pg_export_snapshot() AS snapshot')).rows[0].snapshot;
- const evidence=(await client.query("SELECT tenant_id,kind,id,data->>'objectKey' object_key,data->>'objectVersion' object_version,data->>'sha256' sha256 FROM entities WHERE kind IN ('evidence','packets') ORDER BY tenant_id,kind,id")).rows;
+ const evidence=(await client.query("SELECT tenant_id,kind,id,data->>'objectKey' object_key,data->>'objectVersion' object_version,data->>'sha256' sha256 FROM entities WHERE kind IN ('evidence','packets','tenant_exports') ORDER BY tenant_id,kind,id")).rows;
  const counts=(await client.query('SELECT tenant_id,kind,count(*)::text count FROM entities GROUP BY tenant_id,kind ORDER BY tenant_id,kind')).rows;
- await postgresTool('pg_dump',['--format=custom','--no-owner',`--snapshot=${snapshot}`,'--file',partial],url);
+ await postgresTool('pg_dump',['--format=custom','--no-owner','--enable-row-security','--rows-per-insert=1000',`--snapshot=${snapshot}`,'--file',partial],url);
  await client.query('COMMIT');
  const sha=createHash('sha256');for await(const chunk of createReadStream(partial))sha.update(chunk);const hash=sha.digest('hex');
  const result={format:'cargoorbit-backup-v1',createdAt:new Date().toISOString(),databaseArchive:`${name}.dump`,sha256:hash,bytes:(await stat(partial)).size,entityCounts:counts,evidence,objectBackupStatus:'must_reconcile_and_copy_exact_versions_separately'};

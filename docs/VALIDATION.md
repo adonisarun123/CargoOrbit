@@ -1,33 +1,33 @@
 # Release-candidate validation — 24 October 2026
 
-This record reports executed checks, not production certification. The requirement-by-requirement assessment is in [REQUIREMENTS.md](REQUIREMENTS.md); deployment acceptance remains separate.
+This record distinguishes executed engineering checks from production acceptance. See [REQUIREMENTS.md](REQUIREMENTS.md), [ANDROID_SECURITY_REVIEW.md](ANDROID_SECURITY_REVIEW.md), and the [Render deployment guide](../infra/RENDER.md) for boundaries. No live customer deployment, provider delivery or physical-device certification is claimed.
 
 ## Executed locally
 
-- TypeScript checks across database, domain, API, web and Android source passed.
-- Full regression suite: 167 passed across 21 suites; six hosted PostgreSQL tests skipped because no `TEST_DATABASE_URL` is available locally. Final review regressions cover withholding/credit verification, original-paper custody and replay after receiver revocation. PGlite executes actual PostgreSQL SQL, RLS and triggers for local tests; it does not replace multi-connection server acceptance.
-- API/domain/database compilation and optimized Next.js production build passed.
-- Expo package compatibility and mobile TypeScript 6 checks passed. These are source/tooling checks, not a signed Android build or device pass.
-- Scoped deployed API/web production dependency audit: zero vulnerabilities. Patched Zod, Multer and js-yaml dependencies are locked. Full workspace audit remains blocked by one upstream node-forge advisory propagated through four Expo toolchain packages. [Dependency review](../infra/DEPENDENCY_REVIEW.md) records the affected graph and no-patched-version evidence; no advisory is waived.
-- A representative two-page delivery receipt was rendered and visually inspected after correcting post-table text positioning and reserving footer space. This is a layout check, not a general accessibility/Unicode certification.
-- Three credential-free operator command tests check that seed/provisioning entrypoints reach configuration validation without module-format errors.
-- Local export streaming/error cleanup, exact evidence hashes, scanner protocol, PDF generation, reminder shifts/reversals, callback replay, sessions/contact/invitations, receiver/policy/correction/finance workflows, warehouse/provider boundaries and mobile queue/session regressions are exercised by tests.
-- Production readiness command fails without actual production environment/acceptance evidence, as intended. Operator script syntax and CI YAML checks pass.
+- TypeScript checks across database, domain, API, web and Android source passed after the final contract-limit integration.
+- The final integrated local suite passed 294 tests, with six hosted PostgreSQL tests skipped locally. PostgreSQL SQL/RLS/immutability checks execute through PGlite; hosted multi-connection tests run in CI.
+- Optimized Next.js build passed with the workspace, tracking link, OIDC callback and authenticated receipt-verification routes. Focused browser-side tests cover session isolation, CSV mappings, callback return/binding guards, receipt hashes and bounded/streaming archive downloads.
+- Twenty-one operational/export regressions passed, including cursor scope, stale task updates, role-matched assignment, current-user inbox, concurrent archive attempt fencing, aborts while waiting on database/storage, immutable-object hash failures and real Node stream cancellation.
+- Scoped API/web production dependency audit returned zero vulnerabilities. The hash-locked node-forge candidate mitigation reproduced and rejected the known malformed-signature vector and passed 13 normal interoperability/compatibility probes. An independent implementation review repeated those probes and tamper refusal. This does not erase the upstream advisory or constitute independent security certification.
+- Native Expo prebuild/configuration checks passed for preview and diagnostics: HTTPS enforced, backups disabled, unnecessary permissions removed and no debug signing fallback for release. Native APK compilation and emulator execution are CI work, not local claims.
+- The Render YAML was checked against the published schema. Official CLI semantic validation reached the separate CLI authentication requirement; connected MCP authentication is not available automatically to that CLI.
+- The load harness was exercised against a real local HTTP fixture, including deliberate failures that correctly fail the thresholds. This is validation of the harness, not evidence that CargoOrbit meets its production capacity targets.
+- Production readiness remains fail-closed without configured runtime dependencies and actual per-commit acceptance evidence.
 
-## GitHub CI
+## Hosted checks
 
-The workflow runs migration/checksum repeatability, real PostgreSQL isolation/lease/session tests, source checks, full tests/build, Expo compatibility and a scoped server dependency audit. Its container job builds a non-root server-only image and performs an HTTP smoke test with a read-only filesystem.
+CI runs migration/checksum repeatability, real PostgreSQL tenant/session/outbox tests, full source/test/build checks, four browser scenarios against real API/worker/PostgreSQL, a disposable database/object recovery rehearsal, scoped server audits and a non-root server-container HTTP smoke test. A separate Android workflow compiles unsigned preview/diagnostic APKs and exercises SQLCipher/restart diagnostics on an emulator.
 
-Mobile toolchain security is a separate non-waived blocking job. A failing mobile security job must not be reported as a green production release even if server checks pass. A committed workflow is not evidence that its run passed: inspect the Actions run for the exact pushed SHA.
+Inspect the Actions runs for the exact pushed commit; a workflow definition alone is not a passing result. Raw full-workspace advisory audit remains a distinct hard-failing gate while the unresolved node-forge advisory applies. The mitigation proof and raw audit are retained together. CI unsigned diagnostics do not establish signed fleet-device acceptance.
 
-## Not executed or not satisfied
+## Live acceptance still required
 
-- Browser visual, accessibility and complete end-to-end validation. Local Chromium downloads repeatedly returned an empty/invalid archive; no browser pass or screenshot is claimed.
-- Local Docker execution or hosted PostgreSQL integration. GitHub CI is configured to perform these; this local record does not pre-claim its outcome.
-- Signed Android APK/AAB, real SQLCipher encrypted-at-rest proof, camera/device cleanup, 24-hour offline and 100-draft/300-MB capacity tests.
-- Live S3/IAM/versioning recovery, ClamAV freshness, backups/PITR/object restore drill, load/latency/SLA targets or independent penetration testing.
-- Real OTP/DLT/invitation/notification delivery, ULIP/e-way/ERP/WMS/eSign vendor mappings, permitted datasets, source approvals and sandbox certification. Gateways are disabled without operator configuration; no official status is fabricated.
-- Customer receipt/finance agreements, all 38 SRS UAT scenarios, region/domain/processor approval and named operational/security owners.
-- Code gaps explicitly listed in REQUIREMENTS.md, including scoped support access, selected workflow/analytics extensions and separately scoped P4 capabilities. Approval-only retention requests do not automate evidence deletion or tenant closure.
+- Approved hosting region, sized plans, domain, S3/IAM/versioning and runtime secrets; actual health, scanner freshness and ingress checks.
+- OTP/invitation/notification contracts and approved senders/templates; selected government/ERP/WMS/eSign provider mappings, access rights and sandbox results.
+- Signed APK/AAB, signing-key custody, 24-hour offline/force-stop/low-storage/shared-device/upgrade behavior on the agreed physical Android fleet.
+- Independent security acceptance of the mitigation and full system; the raw upstream advisory remains explicit.
+- Customer receipt/finance acceptance, representative accessibility/browser UAT and the SRS scenarios assigned to enabled phases.
+- Full cloud DB/object/PITR recovery, measured RPO/RTO, production load/latency/backlog targets, incident ownership and retention/backup disposal drills.
+- Remaining code boundaries marked Partial or Absent in REQUIREMENTS.md, especially high-volume indexed workflows, provider-specific mappings and conditional advanced hardware/model capabilities.
 
-No production resources were provisioned, no live provider messages sent, and no signed mobile artifact or live service deployment is claimed.
+No live tenant deletion, external provider message or cloud resource creation was performed during these local checks.

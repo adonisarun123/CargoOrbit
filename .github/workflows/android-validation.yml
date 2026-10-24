@@ -1,0 +1,63 @@
+name: Android native validation
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cargoorbit-android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-diagnostics:
+    name: Android ${{ matrix.profile }} native build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [preview, diagnostics]
+    env:
+      EAS_BUILD_PROFILE: ${{ matrix.profile }}
+      EXPO_PUBLIC_NATIVE_DIAGNOSTICS: ${{ matrix.profile == 'diagnostics' && 'true' || '' }}
+      EXPO_PUBLIC_API_URL: https://example.invalid/v1
+      CI: '1'
+      GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2 -Xmx4g
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: android-actions/setup-android@v3
+      - name: Install pinned native build tool versions
+        run: sdkmanager 'platforms;android-37' 'build-tools;37.0.0' 'ndk;27.1.12297006' 'cmake;3.22.1'
+      - run: npm ci
+      - run: npm run security:forge
+      - name: Build unsigned native application
+        run: bash apps/mobile/scripts/build-android.sh assembleRelease
+      - name: Enable KVM access for the test emulator
+        if: matrix.profile == 'diagnostics'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify native encrypted persistence and restart recovery
+        if: matrix.profile == 'diagnostics'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: bash apps/mobile/scripts/test-android-emulator.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-${{ matrix.profile }}-validation-unsigned-not-production
+          path: |
+            apps/mobile/native-test-results/
+            apps/mobile/android/app/build/outputs/apk/release/*unsigned.apk
+          if-no-files-found: warn
+          retention-days: 7

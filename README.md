@@ -62,7 +62,7 @@ cd apps/mobile
 npx expo run:android
 ```
 
-SQLCipher requires a custom native build; **Expo Go is unsupported**. A per-account KeyStore-backed encryption key isolates cached assignments and drafts. Reopening the app restores pending operations; reconnect/foreground/manual retry uploads with stable identifiers. Failed persistence is shown as an error. This repository has source and EAS configuration, not a signed, device-certified APK. Run the device acceptance matrix in `docs/OPERATIONS.md`.
+SQLCipher requires a custom native build; **Expo Go is unsupported**. A per-account KeyStore-backed encryption key isolates cached assignments and drafts. Reopening the app restores pending operations; reconnect/foreground/manual retry uploads with stable identifiers. Failed persistence is shown as an error. This repository includes a reproducible local Gradle build and native diagnostic workflow. Signed-device acceptance is still required; the reviewed build-tool mitigation does not change the unresolved upstream advisory. Run the device acceptance matrix in `docs/OPERATIONS.md`.
 
 ## Verification
 
@@ -83,6 +83,6 @@ Use `scripts/provision-account.ts` to enroll an initial verified owner/customer 
 
 No ULIP, e-way government write, GST, SAP, GPS vendor, WMS vendor, eSign, bank or robotics credential is included. No official status is fabricated. Local compliance tasks do not extend e-way bills. Telemetry does not establish goods receipt. Safety warnings need human review; no vehicle actuation or bank transfer endpoint exists. An approval-gated HTTPS provider gateway supports permitted read/write/reconciliation contracts, but no provider-specific operation is enabled without credentials, purpose/expiry approval and sandbox evidence. Reviewed route plans and rule-based ETA are available; optimizing solvers, AI, customs filing and a validated digital twin remain separate roadmap work.
 
-Deploy using [the infrastructure guide](infra/DEPLOYMENT.md) and `compose.production.yaml`; run `node scripts/release-readiness.mjs` against the target environment and actual per-commit acceptance evidence. Missing evidence intentionally blocks release. See [validation results and open gates](docs/VALIDATION.md).
+Deploy using [the infrastructure guide](infra/DEPLOYMENT.md), the Render Blueprint, or `compose.production.yaml`; run `node scripts/release-readiness.mjs` against the target environment and actual per-commit acceptance evidence. Missing evidence intentionally blocks release. See [validation results and open gates](docs/VALIDATION.md).
 
 Read [Architecture](docs/ARCHITECTURE.md), [Requirements](docs/REQUIREMENTS.md), [Operations](docs/OPERATIONS.md), and [API](docs/API.md). The original specification is preserved in [docs/SRS.md](docs/SRS.md).

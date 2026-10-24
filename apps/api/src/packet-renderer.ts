@@ -2,7 +2,8 @@ import PDFDocument from 'pdfkit';
 export interface SealedReceipt {id:string;version:number;status:string;acceptedAt:string;payloadHash:string;acceptedPayload:Record<string,any>}
 const printable=(v:unknown)=>String(v??'Not recorded').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g,'').slice(0,10000);
 /** Only sealed snapshot values enter this renderer; current mutable masters are never consulted. */
-export async function renderReceipt(pod:SealedReceipt):Promise<Buffer>{
+export async function renderReceipt(pod:SealedReceipt,options:{verificationUrl?:string}={}):Promise<Buffer>{
+ if(options.verificationUrl){const u=new URL(options.verificationUrl);if(!['https:','http:'].includes(u.protocol)||u.username||u.password)throw new Error('Receipt verification link must use an authenticated application URL');}
  const d=new PDFDocument({size:'A4',margins:{top:44,right:44,bottom:68,left:44},bufferPages:true,info:{Title:`Proof of delivery ${pod.id}`,Author:'CargoOrbit'}}),chunks:Buffer[]=[];
  const complete=new Promise<Buffer>((resolve,reject)=>{d.on('data',c=>chunks.push(c));d.on('end',()=>resolve(Buffer.concat(chunks)));d.on('error',reject)});
  const p=pod.acceptedPayload,navy='#172b45',grey='#52617a';
@@ -20,6 +21,6 @@ export async function renderReceipt(pod:SealedReceipt):Promise<Buffer>{
  section('Authority and acknowledgement');pair('Receiver',p.grantSnapshot?.receiverName||p.receiverId);pair('Organization / authority grant',`${p.grantSnapshot?.organizationId||p.consigneeId} / ${p.grantSnapshot?.id||'Not recorded'}`);pair('Authority validity',`${p.grantSnapshot?.validFrom||''} to ${p.grantSnapshot?.validUntil||''}`);pair('Policy / privacy notice',`${p.policyId} v${p.policyVersion} / ${p.privacyNoticeVersion}`);pair('Acknowledgement',p.declaration);
  pair('Quantity tolerance / receiver scope',`${p.quantityTolerancePercent??0}% / ${p.receiverScope||'facility'}`);
  section('Acknowledged originals');for(const e of p.evidence||[]){pair('Evidence ID / version',`${e.id} / ${e.objectVersion}`);pair('SHA-256',e.sha256);}if(!(p.evidence||[]).length)pair('Original files','No attachments were included in the acknowledged set.');
- section('Integrity');pair('Sealed payload SHA-256',pod.payloadHash);pair('Verification','Retrieve this exact version and its JSON manifest through authenticated CargoOrbit access. This record does not by itself approve freight charges or provide government signature certification.');
+ section('Integrity');pair('Sealed payload SHA-256',pod.payloadHash);if(options.verificationUrl){space(80);d.x=44;d.font('Helvetica-Bold').fontSize(8).fillColor(grey).text('AUTHENTICATED VERIFICATION URL',{width:505});d.font('Helvetica').fontSize(9).fillColor('#087f70').text(options.verificationUrl,{width:505,link:options.verificationUrl,underline:true}).moveDown(.5);pair('Access','Sign in to an authorized CargoOrbit workspace. Possession of this URL does not grant receipt access. Compare the exact version and payload hash.');}pair('Verification','Retrieve this exact version and its JSON manifest through authenticated CargoOrbit access. This record does not by itself approve freight charges or provide government signature certification.');
  const range=d.bufferedPageRange();for(let page=range.start;page<range.start+range.count;page++){d.switchToPage(page);d.font('Helvetica').fontSize(8).fillColor(grey).text(`CargoOrbit | ${pod.id.slice(0,18)} | Page ${page+1} of ${range.count}`,44,794,{lineBreak:false});}d.end();return complete;
 }

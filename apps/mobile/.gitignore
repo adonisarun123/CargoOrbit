@@ -1,0 +1,6 @@
+android/
+ios/
+.expo/
+native-test-results/
+*.keystore
+*.jks

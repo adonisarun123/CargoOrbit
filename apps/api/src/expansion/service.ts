@@ -1,5 +1,10 @@
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import type { Context, DatabasePort, Entity, Transaction } from '@cargoorbit/database';
+import {executeLaunch,launchActions,launchPhase,launchResources} from './launch.js';
+import type {LaunchContext} from './launch-kit.js';
+import {operationalObservation,visibility} from './telemetry-launch.js';
+import {recoveryReportView} from './finance-launch.js';
+import {redactWarehouse} from './warehouse-launch.js';
 import { canonical, choice, date, decimal, fail, formatted, number, object, text, type Phase, type RecordEntity } from './types.js';
 
 const P2 = ['owner', 'operations', 'control_room'];
@@ -22,8 +27,9 @@ export class ExpansionService {
         return fail(403, 'ENTITLEMENT_ADMINISTRATION_REQUIRED', 'Use the approved tenant entitlement configuration route');
 
       }
-      const phase = this.phase(action);
+      const phase = launchActions.has(action) ? launchPhase(action) : this.phase(action);
       await this.entitled(tx, phase);
+      if(launchActions.has(action)) return executeLaunch(this.launchContext(tx,ctx),action,input);
       switch (action) {
         case 'mapExternalIdentifier': return this.mapIdentifier(tx, ctx, input);
         case 'registerDevice': return this.registerDevice(tx, ctx, input);
@@ -79,7 +85,9 @@ export class ExpansionService {
         const conf = await tx.get<RecordEntity>('configuration', 'features');
         return { enabled: conf?.enabled ?? [], integrations: [{ provider: 'ULIP', status: 'not_configured', officialVerification: false }, { provider: 'ERP', status: 'not_configured' }, { provider: 'WCS', status: 'not_configured' }], machineControlSupported: false };
       }
+      if(resource==='visibility'){await this.entitled(tx,'P2');this.role(ctx,[...P2,'auditor']);return visibility(this.launchContext(tx,ctx));}
       const resources: Record<string, { kind: string; phase: Phase; roles: string[] }> = {
+        ...launchResources,
         devices: { kind: 'devices', phase: 'P2', roles: [...P2, 'auditor'] },
         assignments: { kind: 'device_assignments', phase: 'P2', roles: [...P2, 'auditor'] },
         observations: { kind: 'observations', phase: 'P2', roles: ['owner', 'control_room', 'auditor'] },
@@ -120,13 +128,15 @@ export class ExpansionService {
       if (!definition) fail(404, 'RESOURCE_NOT_FOUND', 'Unknown expansion resource');
       await this.entitled(tx, definition.phase); this.role(ctx, definition.roles);
       const rows = id ? [await this.required(tx, definition.kind, id)] : await tx.list<RecordEntity>(definition.kind);
-      const allowed = rows.filter(v => this.canSite(ctx, typeof v.facilityId === 'string' ? v.facilityId : undefined) && (ctx.role !== 'warehouse' || !!ctx.organizationId && v.ownerOrganizationId === ctx.organizationId));
+      const scopedRows = rows.filter(v => this.canSite(ctx, typeof v.facilityId === 'string' ? v.facilityId : undefined) && (ctx.role !== 'warehouse' || !!ctx.organizationId && v.ownerOrganizationId === ctx.organizationId));
+      let allowed=await redactWarehouse(this.launchContext(tx,ctx),resource,scopedRows);if(resource==='recoveryReports')allowed=await Promise.all(allowed.map(r=>recoveryReportView(this.launchContext(tx,ctx),r)));
       if (id && !allowed.length) fail(404, 'NOT_FOUND', 'Record not found');
       if (resource === 'safety' || resource === 'breathTests') await tx.audit('restricted.safety.read', id ?? 'list', {});
       return id ? allowed[0] : allowed;
     });
   }
 
+  private launchContext(tx:Transaction,ctx:Context):LaunchContext{return {tx,ctx,now:this.time(),hooks:{receipt:i=>this.inventoryReceipt(tx,ctx,i),count:i=>this.count(tx,ctx,i),approveCount:i=>this.approveCount(tx,ctx,i)}};}
   private time() { return this.now().toISOString(); }
   private role(ctx: Context, roles: string[]) { if (!roles.includes(ctx.role)) fail(403, 'ROLE_FORBIDDEN', 'Your role cannot perform this operation'); }
   private canSite(ctx: Context, facilityId?: string) { return ctx.role !== 'warehouse' || !!facilityId && !!ctx.facilityIds?.includes(facilityId); }
@@ -169,7 +179,7 @@ export class ExpansionService {
     const serial = text(i, 'serial'), vendor = text(i, 'vendor');
     if ((await tx.list<RecordEntity>('devices')).some(d => d.serial === serial && d.vendor === vendor && d.status === 'active')) fail(409, 'DEVICE_EXISTS', 'Vendor serial already registered');
     const capabilities = i.capabilities;
-    if (!Array.isArray(capabilities) || !capabilities.length || capabilities.some(v => !['gps','temperature','door','fuel','breath','camera','humidity','tamper'].includes(v))) fail(400, 'INVALID_CAPABILITIES', 'Select supported device capabilities');
+    if (!Array.isArray(capabilities) || !capabilities.length || capabilities.some(v => !['gps','temperature','door','fuel','breath','camera','humidity','tamper','connectivity'].includes(v))) fail(400, 'INVALID_CAPABILITIES', 'Select supported device capabilities');
     return this.create(tx, ctx, 'devices', { vendor, serial, publicKey, capabilities, firmware: text(i, 'firmware'), calibrationExpiresAt: date(i, 'calibrationExpiresAt', true) || null, approvalReference: text(i, 'approvalReference'), status: 'active' });
   }
 
@@ -205,7 +215,7 @@ export class ExpansionService {
     if (!valid) fail(401, 'BAD_SIGNATURE', 'Device event signature is invalid');
     const id = sha({ deviceId, eventId }), digest = sha(envelope), prior = await tx.get<RecordEntity>('observations', id);
     if (prior) { if (prior.payloadHash !== digest) fail(409, 'EVENT_CONFLICT', 'Event identifier was already used with different content'); return { ...prior, duplicate: true }; }
-    const occurredAt = date(envelope, 'occurredAt'), kind = choice(envelope, 'kind', ['gps','temperature','door','fuel','humidity','tamper']);
+    const occurredAt = date(envelope, 'occurredAt'), kind = choice(envelope, 'kind', ['gps','temperature','door','fuel','humidity','tamper','connectivity']);
     if (!Array.isArray(device.capabilities) || !device.capabilities.includes(kind)) fail(400, 'DEVICE_CAPABILITY', 'Device is not registered for this capability');
     const ingestTime = this.time();
     if (Date.parse(ingestTime) - Date.parse(occurredAt) > 31 * 86400000) fail(400, 'OBSERVATION_TOO_OLD', 'Observations older than 31 days require an archival import process');
@@ -214,14 +224,17 @@ export class ExpansionService {
     if (assignments.length !== 1) fail(409, 'ASSIGNMENT_UNKNOWN', 'No unambiguous device assignment exists at observation time');
     const assignment = assignments[0]!, data = object(envelope.data);
     if (envelope.vehicleId && envelope.vehicleId !== assignment.vehicleId || envelope.facilityId && envelope.facilityId !== assignment.facilityId) fail(403, 'TARGET_MISMATCH', 'Event target does not match the device assignment');
-    if (kind === 'gps') { number(data, 'latitude', -90, 90); number(data, 'longitude', -180, 180); number(data, 'accuracyMeters', 0, 100000); }
+    if (kind === 'gps') { number(data, 'latitude', -90, 90); number(data, 'longitude', -180, 180); number(data, 'accuracyMeters', 0, 100000); if(data.speedKmh!==undefined)number(data,'speedKmh',0,300);if(data.ignitionOn!==undefined&&typeof data.ignitionOn!=='boolean')fail(400,'IGNITION_STATE','Ignition state must be boolean'); }
+    else if(kind==='connectivity'){if(typeof data.online!=='boolean')fail(400,'CONNECTIVITY_STATE','Connectivity must be an explicit signed boolean');}
     else { text(data, 'unit'); if (typeof data.value !== 'number' || !Number.isFinite(data.value)) fail(400, 'SENSOR_VALUE', 'Sensor value must be a finite number'); }
     const observation = await this.append(tx, ctx, 'observations', { deviceId, eventId, occurredAt, ingestedAt: ingestTime, kind, data, assignmentId: assignment.id, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId, source: device.vendor, payloadHash: digest, late: Date.parse(ingestTime) - Date.parse(occurredAt) > 300000, sensorHealth: choice(envelope, 'sensorHealth', ['healthy','faulty','unknown']), calibrationValid: !['temperature','fuel','humidity'].includes(kind) || !!device.calibrationExpiresAt && String(device.calibrationExpiresAt) >= occurredAt }, id);
     if (kind === 'gps') {
       const positionId = String(assignment.vehicleId ?? assignment.facilityId), current = await tx.get<RecordEntity>('positions', positionId);
-      if (!current || String(current.occurredAt) < occurredAt) await tx.put('positions', { id: positionId, observationId: id, deviceId, occurredAt, ingestedAt: ingestTime, data, source: device.vendor, assignmentId: assignment.id, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId });
+      if (!current || String(current.occurredAt) < occurredAt) await tx.put('positions', { id: positionId, observationId: id, deviceId, occurredAt, ingestedAt: ingestTime, data, source: device.vendor,sensorHealth:observation.sensorHealth, assignmentId: assignment.id, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId });
     }
+    if(kind==='gps'||kind==='connectivity'){const h=await tx.get<RecordEntity>('device_health',deviceId);if(!h||String(h.occurredAt)<occurredAt)await tx.put('device_health',{id:deviceId,vehicleId:assignment.vehicleId,facilityId:assignment.facilityId,occurredAt,observationId:id,online:kind==='gps'?true:data.online,sensorHealth:observation.sensorHealth});}
     await this.evaluateSensorRules(tx, ctx, observation);
+    await operationalObservation(this.launchContext(tx,ctx),observation);
     await tx.emit('telemetry.observed', id, { deviceId, kind, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId });
     return observation;
   }
@@ -235,7 +248,7 @@ export class ExpansionService {
   }
 
   private async evaluateSensorRules(tx: Transaction, ctx: Context, o: RecordEntity) {
-    if (o.kind === 'gps' || o.sensorHealth !== 'healthy' || !o.calibrationValid || o.late) return;
+    if (o.kind === 'gps' || o.kind==='connectivity' || o.sensorHealth !== 'healthy' || !o.calibrationValid || o.late) return;
     const data = object(o.data), rules = (await tx.list<RecordEntity>('alert_rules')).filter(r => r.deviceId === o.deviceId && r.metric === o.kind && r.active && r.unit === data.unit);
     for (const rule of rules) {
       const v = Number(data.value); if (!Number.isFinite(v)) continue;
@@ -338,10 +351,10 @@ export class ExpansionService {
     this.role(ctx, WAREHOUSE);
     const facilityId = text(i, 'facilityId'), ownerOrganizationId = text(i, 'ownerOrganizationId'); await this.stockAuthority(tx, ctx, facilityId, ownerOrganizationId);
     const operationId = `receipt:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
-    const expected = decimal(i.expectedQuantity, 'expectedQuantity'), accepted = decimal(i.acceptedQuantity, 'acceptedQuantity'), damaged = decimal(i.damagedQuantity, 'damagedQuantity'), short = decimal(i.shortQuantity, 'shortQuantity');
-    if (accepted + damaged + short !== expected || expected <= 0n) fail(400, 'QUANTITY_MISMATCH', 'Expected receipt must equal accepted plus damaged plus short');
+    const expected = decimal(i.expectedQuantity, 'expectedQuantity'), accepted = decimal(i.acceptedQuantity, 'acceptedQuantity'), damaged = decimal(i.damagedQuantity, 'damagedQuantity'), quarantine=decimal(i.quarantineQuantity??'0','quarantineQuantity'), short = decimal(i.shortQuantity, 'shortQuantity');
+    if (accepted + damaged + quarantine + short !== expected || expected <= 0n) fail(400, 'QUANTITY_MISMATCH', 'Expected receipt must equal accepted, damaged, quarantine and short quantities');
     const sourceReference = text(i, 'sourceReference'), receivedAt = date(i, 'receivedAt'), movements: RecordEntity[] = [];
-    for (const [condition, quantity] of [['available', accepted], ['damaged', damaged]] as const) {
+    for (const [condition, quantity] of [['available', accepted], ['damaged', damaged], ['quarantine',quarantine]] as const) {
       if (quantity === 0n) continue;
       const fields = { ...i, condition }, stockId = this.stockId(fields), existing = await tx.get<RecordEntity>('stock', stockId);
       const stock = existing ?? { id: stockId, facilityId, ownerOrganizationId, sku: text(i, 'sku'), bin: text(i, 'bin'), unit: text(i, 'unit'), lot: text(i, 'lot', true), condition, quantity: '0', reserved: '0' };
@@ -384,7 +397,7 @@ export class ExpansionService {
   private async count(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
     this.role(ctx, WAREHOUSE); const stock = await this.required(tx, 'stock', text(i, 'stockId')); this.site(ctx, String(stock.facilityId)); this.stockOwner(ctx, String(stock.ownerOrganizationId));
     const observedQuantity = formatted(decimal(i.observedQuantity, 'observedQuantity'));
-    return this.create(tx, ctx, 'counts', { stockId: stock.id, facilityId: stock.facilityId, ownerOrganizationId: stock.ownerOrganizationId, expectedSnapshot: stock.quantity, observedQuantity, source: choice(i, 'source', ['handheld','camera','drone','manual']), sourceReference: text(i, 'sourceReference'), confidence: i.confidence === undefined ? null : number(i, 'confidence', 0, 1), status: 'awaiting_review', stockUpdatedAt: stock.updatedAt });
+    const result=await this.create(tx, ctx, 'counts', { stockId: stock.id, facilityId: stock.facilityId, ownerOrganizationId: stock.ownerOrganizationId, expectedSnapshot: stock.quantity, observedQuantity, source: choice(i, 'source', ['handheld','camera','drone','manual']), sourceReference: text(i, 'sourceReference'), confidence: i.confidence === undefined ? null : number(i, 'confidence', 0, 1), status: 'awaiting_review', stockUpdatedAt: stock.updatedAt });if(ctx.role==='warehouse'){const {expectedSnapshot,stockUpdatedAt,...visible}=result;return visible;}return result;
   }
 
   private async approveCount(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
@@ -407,7 +420,8 @@ export class ExpansionService {
     const expected = i.expectedIds, reads = i.readIds;
     if (!Array.isArray(expected) || !Array.isArray(reads) || expected.length > 10000 || reads.length > 10000 || [...expected,...reads].some(v => typeof v !== 'string' || v.length > 200)) fail(400, 'INVALID_READS', 'expectedIds and readIds must be bounded arrays of identifiers');
     const unique = [...new Set(reads as string[])], expectedIds = [...new Set(expected as string[])], missing = expectedIds.filter(v => !unique.includes(v)), unexpected = unique.filter(v => !expectedIds.includes(v));
-    const value = await this.append(tx, ctx, 'dock_reads', { facilityId, ownerOrganizationId, dockId: text(i, 'dockId'), expectedIds, readIds: unique, duplicateCount: reads.length - unique.length, missing, unexpected, direction: choice(i, 'direction', ['in','out','ambiguous']), sourceReference: text(i, 'sourceReference'), reconciliationRequired: missing.length > 0 || unexpected.length > 0 || i.direction === 'ambiguous', stockPosted: false, receiptConfirmed: false });
+    const value = await this.append(tx, ctx, 'dock_reads', { facilityId, ownerOrganizationId, dockId: text(i, 'dockId'), expectedIds, readIds: unique, duplicateCount: reads.length - unique.length, missing, unexpected, direction: choice(i, 'direction', ['in','out','ambiguous']), sourceReference: text(i, 'sourceReference'), reconciliationRequired: missing.length > 0 || unexpected.length > 0 || reads.length>unique.length || i.direction === 'ambiguous', stockPosted: false, receiptConfirmed: false });
+    for(const [reasonCode,identifiers] of [['missing',missing],['unexpected',unexpected],['duplicate',unique.filter(id=>(reads as string[]).filter(v=>v===id).length>1)],['ambiguous_direction',i.direction==='ambiguous'?['direction']:[]]] as const){if(identifiers.length)await this.create(tx,ctx,'handling_exceptions',{dockReadId:value.id,movementId:null,facilityId,ownerOrganizationId,ownerUserId:ctx.userId,reasonCode,identifiers,status:'open',sourceReference:value.sourceReference,receiptConfirmed:false});}
     return this.completed(tx, operationId, i, value);
   }
 

@@ -18,7 +18,9 @@
     "db:seed": "tsx scripts/seed.ts",
     "worker": "npm run worker -w @cargoorbit/api",
     "check": "npm run typecheck && npm test && npm run build",
-    "db:provision": "tsx scripts/provision-runtime.ts"
+    "db:provision": "tsx scripts/provision-runtime.ts",
+    "postinstall": "node apps/mobile/security/forge-mitigation.cjs --apply",
+    "security:forge": "node apps/mobile/security/forge-mitigation.cjs --verify && node apps/mobile/security/verify-forge.cjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.11",
