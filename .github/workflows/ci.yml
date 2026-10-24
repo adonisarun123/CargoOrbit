@@ -79,6 +79,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: API and web production dependency vulnerability gate
         run: npm audit --omit=dev --audit-level=high --workspace=@cargoorbit/api --workspace=@cargoorbit/web
+      - name: Root build and API/web development dependency vulnerability gate
+        run: npm audit --audit-level=high --workspace=@cargoorbit/api --workspace=@cargoorbit/web --include-workspace-root
   mobile-toolchain-security:
     name: Mobile toolchain security (release blocker until upstream patch)
     runs-on: ubuntu-latest
@@ -108,7 +110,7 @@ jobs:
           trap 'docker logs cargoorbit-web-smoke; docker rm --force cargoorbit-web-smoke' EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:3000/ > /tmp/cargoorbit-web.html; then
-              rg --quiet CargoOrbit /tmp/cargoorbit-web.html
+              grep -Fq CargoOrbit /tmp/cargoorbit-web.html
               exit 0
             fi
             sleep 1

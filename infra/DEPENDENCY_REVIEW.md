@@ -1,9 +1,10 @@
 # Dependency security review — 2026-10-24
 
-The API/web production dependency audit passes with zero reported vulnerabilities:
+The API/web production dependency audit and the scoped root/API/web build and development audit both pass with zero reported vulnerabilities:
 
 ```sh
 npm audit --omit=dev --audit-level=high --workspace=@cargoorbit/api --workspace=@cargoorbit/web
+npm audit --audit-level=high --workspace=@cargoorbit/api --workspace=@cargoorbit/web --include-workspace-root
 ```
 
 The complete workspace audit **does not pass**. It reports four high-severity package entries caused by one unresolved advisory: `node-forge` 1.4.0 and its Expo CLI, Expo certificate, and Expo parent dependency paths. The [upstream advisory GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv) states that no patched version is published. The npm registry's latest `node-forge` release at review time is 1.4.0. The affected operation is RSA PKCS#1 v1.5 signature verification. No exception, advisory suppression, speculative replacement, or Expo downgrade has been applied.
@@ -11,6 +12,8 @@ The complete workspace audit **does not pass**. It reports four high-severity pa
 `mobile-toolchain-security` runs the complete production workspace audit as a separate release check. It intentionally fails while this advisory remains. The server image job depends on application verification and the server audit, allowing its image checks to run independently. A green server audit is not approval to release the Android application or its build/signing toolchain. Re-run both audits on the exact candidate commit; any independently reviewed upstream patch must be reproducibly pinned and validated before this blocker can close.
 
 Patched dependencies:
+
+- Vitest 4.1.12 replaces 3.2.7. It removes the affected Tinypool dependency path ([GHSA-5gmw-xhrv-c9v3](https://github.com/advisories/GHSA-5gmw-xhrv-c9v3), [GHSA-85c8-ppgw-ccpr](https://github.com/advisories/GHSA-85c8-ppgw-ccpr)) and includes the patched mocker for [GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9). The complete local suite passes under 4.1.12: 167 tests passed; six real PostgreSQL tests remain reserved for CI. No tests needed weakened or removed assertions.
 
 - Zod 4.6.7 replaces 3.25.76 in API/domain and, through a scoped override, Expo CLI. [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) identifies 4.6.6 as the first patched version. Record schemas use Zod 4's explicit key/value form; the domain import preview narrows parsed output. The test suite exercises Expo's actual extension/command schemas under the override.
 - Multer 2.5.0 is used directly and overrides Nest's vulnerable nested 2.4.0 dependency. [GHSA-q7qp-rjg7-q26m](https://github.com/advisories/GHSA-q7qp-rjg7-q26m) identifies 2.5.0 as patched.
