@@ -1,7 +1,21 @@
 name: Android native validation
+# Web/docs-only changes reuse the unchanged Android component's build evidence.
+# Build-input and workflow changes always rerun native validation.
 on:
   push:
+    paths:
+      - 'apps/mobile/**'
+      - '!apps/mobile/**/*.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/android-validation.yml'
   pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - '!apps/mobile/**/*.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/android-validation.yml'
   workflow_dispatch:
 permissions:
   contents: read
