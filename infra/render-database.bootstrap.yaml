@@ -1,0 +1,13 @@
+# REVIEW ONLY: creates the paid PostgreSQL instance after owner approval. No application secrets are requested.
+# Use this path for initial Blueprint creation, disable Auto Sync, then change the SAME Blueprint path to render.yaml.
+# After recording the DB ID, temporarily allow only the authorized operator egress IP for verified-TLS provisioning.
+databases:
+- name: cargoorbit-postgres
+  region: singapore
+  plan: 0.1c-256mb
+  databaseName: cargoorbit
+  user: cargoorbit_owner
+  postgresMajorVersion: '17'
+  diskSizeGB: 5
+  storageAutoscalingEnabled: false
+  ipAllowList: []

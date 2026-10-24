@@ -8,3 +8,15 @@
 .scope-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;max-height:280px;overflow:auto;padding:8px}.public-tracking{max-width:1000px;margin:0 auto;padding:40px 20px;display:flex;flex-direction:column;gap:28px}
 /* Keep every navigation action reachable on short desktop and mobile viewports. */
 .sidebar{overflow:hidden}.sidebar>nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:3px}.sidebar-logo,.workspace-selector,.sidebar-bottom{flex-shrink:0}
+/* Shared brand and record footers use explicit spacing at every viewport width. */
+.brand{display:flex;align-items:center;gap:9px;font-size:20px;font-weight:700;letter-spacing:-.55px;line-height:1.1}
+.brand-mark{display:flex;align-items:center;justify-content:center;flex:0 0 29px;color:#39cab7}
+.brand>span{display:block;min-width:0;white-space:nowrap}
+.brand small{display:block;margin-top:6px;font-size:8px;font-weight:600;letter-spacing:1px;line-height:1.25;color:var(--muted);white-space:nowrap}
+.sidebar-logo .brand small,.login-story .brand small{color:#9bb0c2}
+.table-footer{display:flex;align-items:center;justify-content:space-between;gap:10px 18px;padding:14px 22px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.5}
+.table-footer>span{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.app-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 24px;padding:0 34px 24px;color:var(--muted);font-size:11px;line-height:1.6}
+.app-footer b{padding:0 4px;font-weight:400}
+@media(max-width:1200px){.app-footer{padding-left:26px;padding-right:26px}}
+@media(max-width:800px){.table-footer{flex-direction:column;align-items:flex-start;gap:8px;padding:14px 16px}.app-footer{flex-direction:column;align-items:flex-start;gap:4px;padding:0 16px 22px}}

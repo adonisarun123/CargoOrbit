@@ -1,4 +1,7 @@
 # REVIEW ONLY: paid resources. Requires approved workspace, Singapore region, costs, secrets and release evidence.
+# Bootstrap DB with infra/render-database.bootstrap.yaml, then update this same Blueprint to this file.
+# Use the full external PostgreSQL hostname with sslmode=verify-full; internal self-signed TLS is incompatible.
+# Keep deny-all until actual API/worker/operator egress CIDRs are approved; never replace with a world-open rule.
 # Supply restricted runtime DATABASE_URL after provisioning; never wire owner connectionString into services.
 services:
 - type: web
@@ -325,4 +328,5 @@ databases:
   postgresMajorVersion: '17'
   diskSizeGB: 5
   storageAutoscalingEnabled: false
+# Replace only after approval with observed service egress CIDRs; preserve them on every later sync.
   ipAllowList: []
