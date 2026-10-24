@@ -6,7 +6,7 @@ CargoOrbit uses a modular TypeScript core with independent web, API, worker and 
 
 `entities` stores typed domain JSONB records under `(tenant_id, kind, id)`, indexed by customer and consignment. This compact baseline favors rapid domain iteration; normalize high-volume telemetry, stock and ledger tables with dedicated constraints as load measurements justify it. `users`, `memberships`, `tenants`, `audit_events`, `outbox_events` are relational tables.
 
-Every business transaction sets a transaction-local tenant context and acquires a tenant advisory lock. The API verifies membership against the database on every request. Forced RLS protects business records, and application checks narrow organization, site, driver and role. A runtime startup guard rejects owner/superuser/BYPASSRLS credentials. Authentication directory tables are accessed by the trusted authentication/admin services and are not generally queryable through the workflow API.
+Every business transaction sets a transaction-local tenant context and acquires a tenant advisory lock. The API verifies persisted sessions/membership on every request; business transactions recheck current session, membership and scope on their locked database connection. Rotating refresh tokens and short-lived scoped step-up tokens bind sensitive changes to the active account and workspace. Forced RLS protects business records, and application checks narrow organization, site, driver and role. A runtime startup guard rejects owner/superuser/BYPASSRLS credentials. Authentication directory tables are accessed by the trusted authentication/admin services and are not generally queryable through the workflow API.
 
 The advisory lock deliberately serializes a tenant's business transactions to protect allocation and acceptance races. This is not an implementation of the SRS throughput target: measure contention, move query filtering/pagination into SQL and separate telemetry write paths before high-volume use. Current lists fetch a tenant resource then filter it in the service; suitable for controlled development datasets only.
 
@@ -20,7 +20,7 @@ A versioned customer policy evaluates separate readiness blockers. Invoice issua
 
 ## Reliability
 
-A durable PostgreSQL outbox provides pending, processing, failed, completed and dead states, bounded retry and a lease for abandoned worker claims. Packet jobs are idempotent. Notification provider requests carry stable IDs; provider-side idempotency is required. Full exactly-once behavior across a remote service cannot be assumed. PostgreSQL is used instead of a second Redis queue for this baseline to avoid a database/queue dual-write gap.
+A durable PostgreSQL outbox provides pending, processing, failed, completed and dead states, bounded retry and a lease for abandoned worker claims. Claims use SKIP LOCKED and lease-token fencing without acquiring the full tenant business lock. Packet jobs are idempotent. Notification provider requests carry stable IDs; provider-side idempotency is required. Full exactly-once behavior across a remote service cannot be assumed. PostgreSQL is used instead of a second Redis queue for this baseline to avoid a database/queue dual-write gap.
 
 Android SQLCipher isolates local databases by tenant and user, with keys in the device secure store. Queue state is persisted before upload. Interrupted uploads retry using the original operation ID. Photos upload before dependent metadata. No offline action creates an authorized final customer acceptance. Native build/device tests are still required.
 
@@ -30,4 +30,4 @@ Device observations use registered Ed25519 identities, assignment validity and e
 
 ## Dependencies
 
-Lockfile records installed dependencies. Before production run vulnerability analysis in an environment with registry access, review dependency notices and periodically update supported releases. Official implementation references: [Next.js output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output), [NestJS authentication](https://docs.nestjs.com/security/authentication), [Expo SQLite / SQLCipher](https://docs.expo.dev/versions/latest/sdk/sqlite/).
+Lockfile records installed dependencies. The current API/web production audit has zero findings; the mobile toolchain still has an unpatched upstream advisory. See [dependency review](../infra/DEPENDENCY_REVIEW.md). Re-run both checks for the release commit and periodically update supported releases. Official implementation references: [Next.js output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output), [NestJS authentication](https://docs.nestjs.com/security/authentication), [Expo SQLite / SQLCipher](https://docs.expo.dev/versions/latest/sdk/sqlite/).

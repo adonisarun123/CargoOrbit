@@ -1,0 +1,107 @@
+# Reference single-host topology. Use managed PostgreSQL/PITR and private versioned S3.
+# Run migrations separately using the operator's owner credential before starting this stack.
+name: cargoorbit-production
+x-app: &app
+  image: ${CARGOORBIT_IMAGE:?Set an immutable release image digest}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [application]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: '5'}
+x-api-environment: &api-environment
+  NODE_ENV: production
+  PORT: '4000'
+  DATABASE_URL: ${DATABASE_URL:?Set restricted runtime database URL with TLS}
+  JWT_SECRET: ${JWT_SECRET:?Set JWT secret}
+  OTP_SECRET: ${OTP_SECRET:?Set OTP secret}
+  MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?Set 64 hex character MFA encryption key}
+  WEB_ORIGIN: https://${APP_DOMAIN:?Set approved public hostname}
+  EVIDENCE_STORAGE: s3
+  AWS_REGION: ${AWS_REGION:-ap-south-1}
+  S3_BUCKET: ${S3_BUCKET:?Set private versioned evidence bucket}
+  MALWARE_SCANNER: clamav
+  CLAMAV_HOST: clamav
+  CLAMAV_PORT: '3310'
+  SMS_WEBHOOK_URL: ${SMS_WEBHOOK_URL:?Set approved OTP provider bridge}
+  SMS_WEBHOOK_TOKEN: ${SMS_WEBHOOK_TOKEN:?Set provider bridge credential}
+  NOTIFICATION_WEBHOOK_URL: ${NOTIFICATION_WEBHOOK_URL:?Set approved notification bridge}
+  NOTIFICATION_WEBHOOK_TOKEN: ${NOTIFICATION_WEBHOOK_TOKEN:?Set notification credential}
+  NOTIFICATION_CALLBACK_SECRET: ${NOTIFICATION_CALLBACK_SECRET:?Set a distinct random callback HMAC secret}
+  INVITATION_WEBHOOK_URL: ${INVITATION_WEBHOOK_URL:?Set approved invitation delivery bridge}
+  INVITATION_WEBHOOK_TOKEN: ${INVITATION_WEBHOOK_TOKEN:?Set invitation delivery credential}
+  TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:-}
+  INTEGRATION_CONFIG_JSON: ${INTEGRATION_CONFIG_JSON:-[]}
+  EXPORT_MAX_BYTES: ${EXPORT_MAX_BYTES:-5368709120}
+  EXPORT_MAX_SECONDS: ${EXPORT_MAX_SECONDS:-1800}
+  EXPORT_MAX_MEMBERS: ${EXPORT_MAX_MEMBERS:-100000}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-15}
+  DB_STATEMENT_TIMEOUT_MS: '30000'
+  DB_LOCK_TIMEOUT_MS: '10000'
+services:
+  api:
+    <<: *app
+    command: [node, apps/api/dist/main.js]
+    environment: *api-environment
+    expose: ['4000']
+    depends_on:
+      clamav: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4000/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  worker:
+    <<: *app
+    command: [node, apps/api/dist/worker.js]
+    environment: *api-environment
+    depends_on:
+      api: {condition: service_healthy}
+  web:
+    <<: *app
+    command: [npm, run, start, -w, '@cargoorbit/web']
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+    expose: ['3000']
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  clamav:
+    image: ${CLAMAV_IMAGE:-clamav/clamav:stable}
+    restart: unless-stopped
+    networks: [application]
+    volumes: [clam-signatures:/var/lib/clamav]
+    healthcheck:
+      test: [CMD, clamdcheck.sh]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+  proxy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    restart: unless-stopped
+    ports: ['80:80','443:443']
+    environment: {APP_DOMAIN: '${APP_DOMAIN}'}
+    networks: [application]
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api: {condition: service_healthy}
+      web: {condition: service_healthy}
+networks:
+  application:
+volumes:
+  clam-signatures:
+  caddy-data:
+  caddy-config:

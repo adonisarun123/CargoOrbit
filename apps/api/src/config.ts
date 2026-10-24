@@ -1,29 +1,14 @@
-import { config as dotenv } from 'dotenv';
-import { resolve } from 'node:path';
-dotenv({ path: resolve(process.cwd(), '.env'), quiet: true });
-dotenv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
-export const production = process.env.NODE_ENV === 'production';
-function secret(name: string): string {
-  const value = process.env[name];
-  if (!value || value.length < 32) throw new Error(`${name} must contain at least 32 characters; set it in the environment`);
-  return value;
-}
-export const config = {
-  port: Number(process.env.PORT || 4000),
-  jwtSecret: secret('JWT_SECRET'),
-  otpSecret: secret('OTP_SECRET'),
-  origin: process.env.WEB_ORIGIN || 'http://localhost:3000',
-  evidenceRoot: resolve(process.env.EVIDENCE_ROOT || '../../var/evidence'),
-  storage: process.env.EVIDENCE_STORAGE || 'local',
-  bucket: process.env.S3_BUCKET || '',
-  region: process.env.AWS_REGION || 'ap-south-1',
-  smsUrl: process.env.SMS_WEBHOOK_URL,
-  smsToken: process.env.SMS_WEBHOOK_TOKEN,
-  scannerHost: process.env.CLAMAV_HOST || '127.0.0.1',
-  scannerPort: Number(process.env.CLAMAV_PORT || 3310),
-  scanner: process.env.MALWARE_SCANNER || 'clamav',
-};
-if (production && (config.origin === '*' || !config.origin.startsWith('https://'))) throw new Error('Production WEB_ORIGIN must be an explicit HTTPS origin');
-if (production && config.storage !== 's3') throw new Error('Production requires private versioned S3 evidence storage');
-if (production && (!config.bucket || config.scanner !== 'clamav' || !config.smsUrl || !config.smsToken)) throw new Error('Production requires S3_BUCKET, CLAMAV scanner and SMS provider configuration');
-if (config.smsUrl && !config.smsUrl.startsWith('https://') && production) throw new Error('Production SMS provider must use HTTPS');
+import {config as dotenv} from 'dotenv';
+import {resolve} from 'node:path';
+dotenv({path:resolve(process.cwd(),'.env'),quiet:true});dotenv({path:resolve(process.cwd(),'../../.env'),quiet:true});
+export const production=process.env.NODE_ENV==='production';
+function secret(name:string){const value=process.env[name];if(!value||value.length<32||production&&/replace|example|change.?me|test-secret/i.test(value))throw new Error(`${name} must be a unique random secret with at least 32 characters`);return value;}
+function integer(name:string,fallback:number,min:number,max:number){const n=Number(process.env[name]??fallback);if(!Number.isInteger(n)||n<min||n>max)throw new Error(`${name} is outside its valid range`);return n;}
+export function validateOrigins(value:string,secure:boolean):string[]{const origins=value.split(',').map(v=>v.trim());if(!origins.length||origins.some(origin=>{try{const url=new URL(origin);return url.origin!==origin||url.username!==''||url.password!==''||(secure?url.protocol!=='https:':!['https:','http:'].includes(url.protocol));}catch{return true;}}))throw new Error('WEB_ORIGIN must contain explicit allowed origins, without paths or wildcards');return origins;}
+function endpoint(name:string){const value=process.env[name];if(!value)return undefined;const url=new URL(value);if(url.username||url.password||url.hash||!['http:','https:'].includes(url.protocol)||production&&url.protocol!=='https:')throw new Error(`${name} must be an HTTPS endpoint without embedded credentials`);return value;}
+export const config={port:integer('PORT',4000,1,65535),jwtSecret:secret('JWT_SECRET'),otpSecret:secret('OTP_SECRET'),origin:process.env.WEB_ORIGIN||'http://localhost:3000',origins:validateOrigins(process.env.WEB_ORIGIN||'http://localhost:3000',production),mfaEncryptionKey:process.env.MFA_ENCRYPTION_KEY,evidenceRoot:resolve(process.env.EVIDENCE_ROOT||'../../var/evidence'),storage:process.env.EVIDENCE_STORAGE||'local',bucket:process.env.S3_BUCKET||'',region:process.env.AWS_REGION||'ap-south-1',smsUrl:endpoint('SMS_WEBHOOK_URL'),smsToken:process.env.SMS_WEBHOOK_TOKEN,invitationUrl:endpoint('INVITATION_WEBHOOK_URL'),invitationToken:process.env.INVITATION_WEBHOOK_TOKEN,scannerHost:process.env.CLAMAV_HOST||'127.0.0.1',scannerPort:integer('CLAMAV_PORT',3310,1,65535),scanner:process.env.MALWARE_SCANNER||'clamav',trustProxy:process.env.TRUST_PROXY_CIDRS?.split(',').map(v=>v.trim()).filter(Boolean)||[]};
+if(config.jwtSecret===config.otpSecret)throw new Error('JWT_SECRET and OTP_SECRET must be distinct');
+if(config.mfaEncryptionKey&&!/^[a-f0-9]{64}$/i.test(config.mfaEncryptionKey))throw new Error('MFA_ENCRYPTION_KEY must be 32 random bytes encoded as hex');
+if(config.trustProxy.some(v=>v==='*'||v==='true'||/^\d+$/.test(v)))throw new Error('TRUST_PROXY_CIDRS requires explicit proxy addresses or CIDRs, not wildcard/hop counts');
+if(production&&config.storage!=='s3')throw new Error('Production requires private versioned S3 evidence storage');
+if(production&&(!config.bucket||config.scanner!=='clamav'||!config.smsUrl||!config.smsToken||!config.mfaEncryptionKey))throw new Error('Production requires S3, ClamAV, OTP adapter and MFA encryption configuration');

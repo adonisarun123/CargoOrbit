@@ -1,0 +1,47 @@
+import {readFile} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
+import {PGlite} from '@electric-sql/pglite';
+import {Pool} from 'pg';
+import {beforeAll,afterAll,describe,it,expect} from 'vitest';
+import {Database,MemoryDatabase,type Context,type Transaction} from '@cargoorbit/database';
+let pg:PGlite;
+beforeAll(async()=>{pg=new PGlite();for(const file of ['001_initial.sql','002_release_hardening.sql'])await pg.exec(await readFile(new URL(`../packages/database/src/${file}`,import.meta.url),'utf8'));await pg.exec("INSERT INTO tenants(id,name) VALUES('db-release','Release tests');SET ROLE cargoorbit_app;SELECT set_config('app.tenant_id','db-release',false)")});
+afterAll(async()=>pg.close());
+describe('release migration constraints',()=>{
+ it('independently rejects duplicate LR keys',async()=>{const data={id:'lr1',lrNumber:'001',branch:'BLR',financialYear:'2026-27'};await pg.query("INSERT INTO entities(tenant_id,kind,id,data) VALUES('db-release','consignments','lr1',$1)",[JSON.stringify(data)]);await expect(pg.query("INSERT INTO entities(tenant_id,kind,id,data) VALUES('db-release','consignments','lr2',$1)",[JSON.stringify({...data,id:'lr2'})])).rejects.toThrow(/consignment_lr_namespace/)});
+ it('prevents historical ledger and policy mutations',async()=>{for(const kind of ['policies','inventory_movements','observations']){await pg.query("INSERT INTO entities(tenant_id,kind,id,data) VALUES('db-release',$1,$1,$2)",[kind,JSON.stringify({id:kind,quantity:'10'})]);await expect(pg.query("UPDATE entities SET data=jsonb_set(data,'{quantity}','20') WHERE kind=$1",[kind])).rejects.toThrow(/immutable|append only/);}});
+ it('preserves exact attachment provenance once an acceptance binds it',async()=>{await pg.query("INSERT INTO entities(tenant_id,kind,id,data) VALUES('db-release','evidence','evidence1',$1)",[JSON.stringify({id:'evidence1',sha256:'original',objectVersion:'v1'})]);await pg.query("INSERT INTO entities(tenant_id,kind,id,data) VALUES('db-release','pods','pod1',$1)",[JSON.stringify({id:'pod1',acceptedPayload:{evidence:[{id:'evidence1',sha256:'original',objectVersion:'v1'}]}})]);await expect(pg.exec("UPDATE entities SET data=jsonb_set(data,'{sha256}','\"changed\"') WHERE kind='evidence'")).rejects.toThrow(/(?:Sealed|Original) evidence/)});
+ it('does not permit runtime schema creation',async()=>{await expect(pg.exec('CREATE TABLE unapproved(id text)')).rejects.toThrow(/permission denied/)});
+ it('provides auth-session schema with single-use refresh hash uniqueness',async()=>{await pg.exec("INSERT INTO users(id,email,password_hash,name) VALUES('u','u@example.test','hash','User');INSERT INTO memberships(id,user_id,tenant_id,role) VALUES('m','u','db-release','owner')");await pg.exec("INSERT INTO auth_sessions(id,user_id,membership_id,refresh_hash,expires_at) VALUES('s','u','m','token-hash',now()+interval '1 day')");await expect(pg.exec("INSERT INTO auth_sessions(id,user_id,membership_id,refresh_hash,expires_at) VALUES('s2','u','m','token-hash',now()+interval '1 day')")).rejects.toThrow(/unique/)});
+ it('supports bounded query methods in the memory adapter',async()=>{const db=new MemoryDatabase(),ctx:Context={tenantId:'t',userId:'u',role:'owner'};await db.transaction(ctx,async tx=>{await tx.put('notifications',{id:'1',status:'pending',dueAt:'2026-10-24'});await tx.put('notifications',{id:'2',status:'sent',dueAt:'2026-10-25'});expect(await tx.count('notifications',{status:'pending'})).toBe(1);expect(await tx.find('notifications',{where:{status:'pending'},before:{field:'dueAt',value:'2026-10-25'},limit:1})).toHaveLength(1);await expect(tx.find('notifications',{limit:10000})).rejects.toThrow(/bounds/);})});
+});
+
+const runtimeUrl=process.env.TEST_DATABASE_URL,adminUrl=process.env.MIGRATION_DATABASE_URL;
+const real=runtimeUrl&&adminUrl?describe:describe.skip;
+real('real PostgreSQL runtime and worker concurrency',()=>{
+ let db:Database,admin:Pool;let ctx:Context;
+ beforeAll(async()=>{if(!/test/i.test(new URL(runtimeUrl!).pathname))throw new Error('Real integration suite requires an explicitly named test database');admin=new Pool({connectionString:adminUrl});db=new Database(runtimeUrl);ctx={tenantId:`release-${randomUUID()}`,userId:'test-worker',role:'owner'};await admin.query('INSERT INTO tenants(id,name) VALUES($1,$2)',[ctx.tenantId,'Disposable release integration suite']);await db.assertRuntimeRole();});
+ afterAll(async()=>{await db?.close();await admin?.end()});
+ it('rejects owner and superuser credentials at the runtime boundary',async()=>{const unsafe=new Database(adminUrl);try{await expect(unsafe.assertRuntimeRole()).rejects.toThrow(/Unsafe runtime database role/)}finally{await unsafe.close()}});
+ it('verifies receiver identity using an active transaction from the same database',async()=>{
+  const userId=randomUUID(),membershipId=randomUUID(),single=new Database(new Pool({connectionString:runtimeUrl,max:1,connectionTimeoutMillis:1000})),foreign=new Database(runtimeUrl);let old:Transaction|undefined;
+  await admin.query("INSERT INTO users(id,email,password_hash,name,verified_contact,contact_verified_at) VALUES($1,'receiver@example.test','test-only','Receiver','receiver@example.test',now())",[userId]);
+  await admin.query("INSERT INTO memberships(id,user_id,tenant_id,role,organization_id,facility_ids) VALUES($1,$2,$3,'receiver','customer',ARRAY['site'])",[membershipId,userId,ctx.tenantId]);
+  try{await single.transaction(ctx,async tx=>{old=tx;expect((await single.verifyReceiver(tx,userId,'customer'))?.facility_ids).toEqual(['site']);expect(await single.verifyReceiver(tx,userId,'different-customer')).toBeUndefined();await expect(foreign.verifyReceiver(tx,userId,'customer')).rejects.toThrow(/active transaction/)});await expect(single.verifyReceiver(old!,userId,'customer')).rejects.toThrow(/active transaction/);}finally{await single.close();await foreign.close()}
+ });
+ it('revalidates session and membership scopes inside the business transaction',async()=>{
+  const userId=randomUUID(),membershipId=randomUUID(),sessionId=randomUUID();
+  await admin.query("INSERT INTO users(id,email,password_hash,name) VALUES($1,$2,'test-only','Operator')",[userId,`${userId}@example.test`]);
+  await admin.query("INSERT INTO memberships(id,user_id,tenant_id,role,facility_ids) VALUES($1,$2,$3,'operations',ARRAY['site'])",[membershipId,userId,ctx.tenantId]);
+  await admin.query("INSERT INTO auth_sessions(id,user_id,membership_id,refresh_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 day')",[sessionId,userId,membershipId,randomUUID()]);
+  const actor:Context={...ctx,userId,role:'operations',facilityIds:['site'],membershipId,sessionId,sessionVersion:1,userSessionVersion:1};
+  await db.transaction(actor,tx=>tx.put('test',{id:'authorized'}));
+  await expect(db.transaction({...actor,facilityIds:[]},tx=>tx.put('test',{id:'wrong-scope'}))).rejects.toMatchObject({status:403,code:'AUTHORIZATION_CHANGED'});
+  await admin.query('UPDATE auth_sessions SET revoked_at=now() WHERE id=$1',[sessionId]);
+  await expect(db.transaction(actor,tx=>tx.put('test',{id:'revoked'}))).rejects.toMatchObject({status:403,code:'AUTHORIZATION_CHANGED'});
+  await db.transaction(ctx,async tx=>{expect(await tx.get('test','wrong-scope')).toBeUndefined();expect(await tx.get('test','revoked')).toBeUndefined()});
+ });
+ it('rolls back business writes and outbox together',async()=>{await expect(db.transaction(ctx,async tx=>{await tx.put('test',{id:'rollback'});await tx.emit('test.event','rollback',{});throw new Error('rollback');})).rejects.toThrow('rollback');await db.transaction(ctx,async tx=>{expect(await tx.get('test','rollback')).toBeUndefined();expect(await tx.list('outbox')).toHaveLength(0)});});
+ it('isolates tenant records even on a reused pooled connection',async()=>{await db.transaction(ctx,tx=>tx.put('test',{id:'visible'}));await admin.query('INSERT INTO tenants(id,name) VALUES($1,$2)',[`${ctx.tenantId}-other`,'Other']);await db.transaction({...ctx,tenantId:`${ctx.tenantId}-other`},async tx=>expect(await tx.get('test','visible')).toBeUndefined());});
+ it('concurrent workers claim distinct rows and stale workers cannot finalize',async()=>{await db.transaction(ctx,async tx=>{await tx.emit('test.lease','one',{});await tx.emit('test.lease','two',{})});const [a,b]=await Promise.all([db.claimOutbox(ctx),db.claimOutbox(ctx)]);expect(a!.id).not.toBe(b!.id);expect(await db.completeOutbox(ctx,a!.id,'wrong-token')).toBe(false);await admin.query("UPDATE outbox_events SET available_at=now()-interval '1 second' WHERE tenant_id=$1 AND id=$2",[ctx.tenantId,a!.id]);const retry=await db.claimOutbox(ctx);expect(retry!.id).toBe(a!.id);expect(retry!.leaseToken).not.toBe(a!.leaseToken);expect(await db.completeOutbox(ctx,a!.id,a!.leaseToken!)).toBe(false);expect(await db.completeOutbox(ctx,retry!.id,retry!.leaseToken!)).toBe(true);expect(await db.failOutbox(ctx,b!.id,b!.leaseToken!,'PROVIDER_UNAVAILABLE',1)).toBe(true);await db.transaction(ctx,async tx=>expect((await tx.get('outbox',b!.id))?.status).toBe('dead'));});
+});

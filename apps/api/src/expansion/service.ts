@@ -7,7 +7,7 @@ const FINANCE = ['owner', 'finance'];
 const WAREHOUSE = ['owner', 'warehouse'];
 const NOW = () => new Date();
 const sha = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
-const immutableKinds = new Set(['observations', 'inventory_movements', 'asset_handovers', 'safety_tests', 'scorecards', 'emissions_runs', 'dock_reads']);
+const immutableKinds = new Set(['observations', 'inventory_movements', 'asset_handovers', 'safety_tests', 'scorecards', 'emissions_runs', 'dock_reads', 'handling_unit_events', 'eta_estimates', 'maintenance_events']);
 
 /** Phase-gated business workflows. Provider transport and machine safety remain independent adapters. */
 export class ExpansionService {
@@ -16,13 +16,11 @@ export class ExpansionService {
 
   async execute(ctx: Context, action: string, raw: unknown): Promise<unknown> {
     const input = object(raw);
+    if (ctx.role === 'warehouse' && !ctx.organizationId) fail(403, 'OWNER_MEMBERSHIP_REQUIRED', 'Warehouse membership must specify the stock owner organization');
     return this.db.transaction(ctx, async tx => {
       if (action === 'setFeatures') {
-        this.role(ctx, ['platform_admin']);
-        const enabled = input.enabled;
-        if (!Array.isArray(enabled) || enabled.some(v => !['P2', 'P3', 'P4'].includes(v))) fail(400, 'INVALID_FEATURES', 'enabled must contain supported phase identifiers');
-        const value = { id: 'features', enabled: [...new Set(enabled)], approvedBy: ctx.userId, approvedAt: this.time(), reference: text(input, 'reference') };
-        await tx.put('configuration', value); await tx.audit('contract.features.changed', 'features', value); return value;
+        return fail(403, 'ENTITLEMENT_ADMINISTRATION_REQUIRED', 'Use the approved tenant entitlement configuration route');
+
       }
       const phase = this.phase(action);
       await this.entitled(tx, phase);
@@ -61,6 +59,15 @@ export class ExpansionService {
         case 'recordMissionOutcome': return this.missionOutcome(tx, ctx, input);
         case 'recordStockObservation': return this.stockObservation(tx, ctx, input);
         case 'recordMaintenance': return this.maintenance(tx, ctx, input);
+        case 'completeMaintenance': return this.completeMaintenance(tx, ctx, input);
+        case 'closeDeviceAssignment': return this.closeAssignment(tx, ctx, input);
+        case 'registerHandlingUnit': return this.registerHandlingUnit(tx, ctx, input);
+        case 'aggregateHandlingUnits': return this.aggregateHandlingUnits(tx, ctx, input);
+        case 'scanHandlingUnit': return this.scanHandlingUnit(tx, ctx, input);
+        case 'cancelReservation': return this.cancelReservation(tx, ctx, input);
+        case 'calculateEta': return this.calculateEta(tx, ctx, input);
+        case 'recordTransportPlan': return this.transportPlan(tx, ctx, input);
+        case 'releaseTransportPlan': return this.releasePlan(tx, ctx, input);
         default: return fail(404, 'ACTION_NOT_FOUND', 'Unknown expansion action');
       }
     });
@@ -96,6 +103,12 @@ export class ExpansionService {
         missions: { kind: 'automation_missions', phase: 'P4', roles: [...WAREHOUSE, 'auditor'] },
         stockObservations: { kind: 'stock_observations', phase: 'P4', roles: [...WAREHOUSE, 'auditor'] },
         maintenance: { kind: 'maintenance', phase: 'P4', roles: [...P2, 'auditor'] },
+        maintenanceEvents: { kind: 'maintenance_events', phase: 'P4', roles: [...P2, 'auditor'] },
+        handlingUnits: { kind: 'handling_units', phase: 'P3', roles: [...WAREHOUSE, 'auditor'] },
+        handlingEvents: { kind: 'handling_unit_events', phase: 'P3', roles: [...WAREHOUSE, 'auditor'] },
+        etaEstimates: { kind: 'eta_estimates', phase: 'P2', roles: [...P2, 'auditor'] },
+        transportPlans: { kind: 'route_plans', phase: 'P4', roles: [...P2, 'auditor'] },
+        emissionsReviews: { kind: 'emissions_reviews', phase: 'P2', roles: ['owner', 'sustainability', 'auditor'] },
       };
       if (resource === 'positions') {
         await this.entitled(tx, 'P2'); this.role(ctx, [...P2, 'auditor']);
@@ -107,7 +120,7 @@ export class ExpansionService {
       if (!definition) fail(404, 'RESOURCE_NOT_FOUND', 'Unknown expansion resource');
       await this.entitled(tx, definition.phase); this.role(ctx, definition.roles);
       const rows = id ? [await this.required(tx, definition.kind, id)] : await tx.list<RecordEntity>(definition.kind);
-      const allowed = rows.filter(v => this.canSite(ctx, typeof v.facilityId === 'string' ? v.facilityId : undefined));
+      const allowed = rows.filter(v => this.canSite(ctx, typeof v.facilityId === 'string' ? v.facilityId : undefined) && (ctx.role !== 'warehouse' || !!ctx.organizationId && v.ownerOrganizationId === ctx.organizationId));
       if (id && !allowed.length) fail(404, 'NOT_FOUND', 'Record not found');
       if (resource === 'safety' || resource === 'breathTests') await tx.audit('restricted.safety.read', id ?? 'list', {});
       return id ? allowed[0] : allowed;
@@ -119,8 +132,8 @@ export class ExpansionService {
   private canSite(ctx: Context, facilityId?: string) { return ctx.role !== 'warehouse' || !!facilityId && !!ctx.facilityIds?.includes(facilityId); }
   private site(ctx: Context, facilityId: string) { if (!this.canSite(ctx, facilityId)) fail(404, 'NOT_FOUND', 'Facility not found'); }
   private phase(action: string): Phase {
-    if (['configureWarehouse','recordInventoryReceipt','reserveStock','confirmPick','recordCount','approveCount','recordDockReads','registerAsset','handoverAsset'].includes(action)) return 'P3';
-    if (['planMission','recordMissionOutcome','recordStockObservation','recordMaintenance'].includes(action)) return 'P4';
+    if (['configureWarehouse','recordInventoryReceipt','reserveStock','confirmPick','recordCount','approveCount','recordDockReads','registerAsset','handoverAsset','registerHandlingUnit','aggregateHandlingUnits','scanHandlingUnit','cancelReservation'].includes(action)) return 'P3';
+    if (['planMission','recordMissionOutcome','recordStockObservation','recordMaintenance','completeMaintenance','recordTransportPlan','releaseTransportPlan'].includes(action)) return 'P4';
     return 'P2';
   }
   private async entitled(tx: Transaction, phase: Phase) {
@@ -181,7 +194,9 @@ export class ExpansionService {
 
   private async ingest(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
     this.role(ctx, ['owner','control_room']);
-    const envelope = object(i.envelope), deviceId = text(envelope, 'deviceId'), eventId = text(envelope, 'eventId');
+    const envelope = object(i.envelope);
+    if (envelope.tenantId !== ctx.tenantId) fail(403, 'TENANT_MISMATCH', 'Signed observation must bind the authenticated tenant');
+    const deviceId = text(envelope, 'deviceId'), eventId = text(envelope, 'eventId');
     const device = await this.required(tx, 'devices', deviceId);
     if (device.status !== 'active') fail(403, 'DEVICE_REVOKED', 'Device credential is revoked');
     const signature = text(i, 'signature');
@@ -193,17 +208,18 @@ export class ExpansionService {
     const occurredAt = date(envelope, 'occurredAt'), kind = choice(envelope, 'kind', ['gps','temperature','door','fuel','humidity','tamper']);
     if (!Array.isArray(device.capabilities) || !device.capabilities.includes(kind)) fail(400, 'DEVICE_CAPABILITY', 'Device is not registered for this capability');
     const ingestTime = this.time();
+    if (Date.parse(ingestTime) - Date.parse(occurredAt) > 31 * 86400000) fail(400, 'OBSERVATION_TOO_OLD', 'Observations older than 31 days require an archival import process');
     if (Date.parse(occurredAt) > Date.parse(ingestTime) + 300000) fail(400, 'CLOCK_SKEW', 'Observation time is too far in the future');
     const assignments = (await tx.list<RecordEntity>('device_assignments')).filter(a => a.deviceId === deviceId && String(a.validFrom) <= occurredAt && (!a.validTo || String(a.validTo) > occurredAt));
     if (assignments.length !== 1) fail(409, 'ASSIGNMENT_UNKNOWN', 'No unambiguous device assignment exists at observation time');
     const assignment = assignments[0]!, data = object(envelope.data);
     if (envelope.vehicleId && envelope.vehicleId !== assignment.vehicleId || envelope.facilityId && envelope.facilityId !== assignment.facilityId) fail(403, 'TARGET_MISMATCH', 'Event target does not match the device assignment');
     if (kind === 'gps') { number(data, 'latitude', -90, 90); number(data, 'longitude', -180, 180); number(data, 'accuracyMeters', 0, 100000); }
-    else { text(data, 'unit'); if (data.value === undefined) fail(400, 'SENSOR_VALUE', 'Sensor value is required'); }
-    const observation = await this.append(tx, ctx, 'observations', { deviceId, eventId, occurredAt, ingestedAt: ingestTime, kind, data, assignmentId: assignment.id, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId, source: device.vendor, payloadHash: digest, late: Date.parse(ingestTime) - Date.parse(occurredAt) > 300000, sensorHealth: choice(envelope, 'sensorHealth', ['healthy','faulty','unknown']), calibrationValid: !device.calibrationExpiresAt || String(device.calibrationExpiresAt) >= occurredAt }, id);
+    else { text(data, 'unit'); if (typeof data.value !== 'number' || !Number.isFinite(data.value)) fail(400, 'SENSOR_VALUE', 'Sensor value must be a finite number'); }
+    const observation = await this.append(tx, ctx, 'observations', { deviceId, eventId, occurredAt, ingestedAt: ingestTime, kind, data, assignmentId: assignment.id, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId, source: device.vendor, payloadHash: digest, late: Date.parse(ingestTime) - Date.parse(occurredAt) > 300000, sensorHealth: choice(envelope, 'sensorHealth', ['healthy','faulty','unknown']), calibrationValid: !['temperature','fuel','humidity'].includes(kind) || !!device.calibrationExpiresAt && String(device.calibrationExpiresAt) >= occurredAt }, id);
     if (kind === 'gps') {
       const positionId = String(assignment.vehicleId ?? assignment.facilityId), current = await tx.get<RecordEntity>('positions', positionId);
-      if (!current || String(current.occurredAt) < occurredAt) await tx.put('positions', { id: positionId, observationId: id, deviceId, occurredAt, ingestedAt: ingestTime, data, source: device.vendor, assignmentId: assignment.id });
+      if (!current || String(current.occurredAt) < occurredAt) await tx.put('positions', { id: positionId, observationId: id, deviceId, occurredAt, ingestedAt: ingestTime, data, source: device.vendor, assignmentId: assignment.id, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId });
     }
     await this.evaluateSensorRules(tx, ctx, observation);
     await tx.emit('telemetry.observed', id, { deviceId, kind, vehicleId: assignment.vehicleId, facilityId: assignment.facilityId });
@@ -214,6 +230,7 @@ export class ExpansionService {
     this.role(ctx, ['owner', 'control_room']);
     const metric = choice(i, 'metric', ['temperature','fuel','humidity']), lower = number(i, 'lower', -1000, 100000), upper = number(i, 'upper', -1000, 100000);
     if (upper <= lower) fail(400, 'INVALID_BOUNDS', 'upper must exceed lower');
+    await this.required(tx, 'devices', text(i, 'deviceId'));
     return this.create(tx, ctx, 'alert_rules', { metric, lower, upper, unit: text(i, 'unit'), hysteresis: number(i, 'hysteresis', 0, (upper - lower) / 2), durationSeconds: number(i, 'durationSeconds', 0, 86400), deviceId: text(i, 'deviceId'), ownerUserId: text(i, 'ownerUserId'), severity: choice(i, 'severity', ['low','medium','high','critical']), version: number(i, 'version', 1, 100000), active: true, sopReference: text(i, 'sopReference') });
   }
 
@@ -229,8 +246,8 @@ export class ExpansionService {
       const beganAt = breached ? state?.beganAt ?? o.occurredAt : recovered ? null : state?.beganAt;
       let alertId = state?.alertId ?? null;
       if (beganAt && !alertId && Date.parse(String(o.occurredAt)) - Date.parse(String(beganAt)) >= Number(rule.durationSeconds) * 1000) {
-        const a = await this.create(tx, ctx, 'alerts', { observationId: o.id, ruleId: rule.id, ruleVersion: rule.version, severity: rule.severity, ownerUserId: rule.ownerUserId, status: 'new', evidence: { data, occurredAt: o.occurredAt }, notificationStatus: 'pending', history: [] });
-        alertId = a.id; await tx.emit('alert.notification.requested', a.id, { ruleId: rule.id, ownerUserId: rule.ownerUserId });
+        const a = await this.create(tx, ctx, 'alerts', { observationId: o.id, ruleId: rule.id, ruleVersion: rule.version, severity: rule.severity, ownerUserId: rule.ownerUserId, status: 'new', evidence: { data, occurredAt: o.occurredAt }, notificationStatus: 'awaiting_approved_schedule', history: [] });
+        alertId = a.id; await tx.emit('telemetry.alert.created', a.id, { alertId: a.id, ruleId: rule.id, ownerUserId: rule.ownerUserId });
       }
       if (recovered) alertId = null;
       await tx.put('rule_states', { id: stateId, beganAt, alertId, lastOccurredAt: o.occurredAt });
@@ -249,6 +266,8 @@ export class ExpansionService {
     this.role(ctx, ['owner','control_room']);
     const clipEvidenceId = text(i, 'clipEvidenceId', true) || null;
     if (clipEvidenceId) { const evidence = await this.required(tx, 'evidence', clipEvidenceId); if (!['clean','CLEAN'].includes(String(evidence.scanStatus ?? evidence.scanState))) fail(409, 'EVIDENCE_NOT_CLEAN', 'Incident clip evidence must be scan clean'); }
+    const previous = (await tx.list<RecordEntity>('safety_events')).find(e => e.provider === i.provider && e.providerEventId === i.providerEventId);
+    if (previous) fail(409, 'PROVIDER_EVENT_EXISTS', 'Provider event already exists; use the review workflow');
     return this.create(tx, ctx, 'safety_events', { driverId: text(i, 'driverId'), vehicleId: text(i, 'vehicleId'), provider: text(i, 'provider'), providerEventId: text(i, 'providerEventId'), occurredAt: date(i, 'occurredAt'), category: choice(i, 'category', ['fatigue','distraction','phone_use','seatbelt','collision_warning']), confidence: i.confidence === undefined ? null : number(i, 'confidence', 0, 1), clipEvidenceId, status: 'unreviewed', reviewHistory: [], allegation: true });
   }
 
@@ -263,14 +282,18 @@ export class ExpansionService {
   private async breathTest(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
     this.role(ctx, ['owner','control_room']); const device = await this.required(tx, 'devices', text(i, 'deviceId'));
     const testedAt = date(i, 'testedAt'), expiresAt = date(i, 'expiresAt'), driverId = text(i, 'driverId'), tripId = text(i, 'tripId');
-    await this.required(tx, 'trips', tripId);
+    const trip = await this.required(tx, 'trips', tripId);
+    if (trip.driverId !== driverId) fail(403, 'DRIVER_TRIP_MISMATCH', 'Breath test driver does not match the assigned trip driver');
     if (expiresAt <= testedAt || Date.parse(testedAt) > this.now().getTime() + 60000) fail(400, 'INVALID_TEST_PERIOD', 'Breath test validity period is invalid');
     if (choice(i, 'context', ['pretrip','in_trip']) === 'in_trip' && i.stationaryConfirmed !== true) fail(409, 'SAFE_STOP_REQUIRED', 'In-trip tests require a confirmed safe stationary location');
     const result = choice(i, 'result', ['pass','fail','tampered','missing']);
     const calibrated = device.status === 'active' && Array.isArray(device.capabilities) && device.capabilities.includes('breath') && !!device.calibrationExpiresAt && String(device.calibrationExpiresAt) >= testedAt;
-    const valid = calibrated && result === 'pass' && expiresAt > this.time();
-    const value = await this.append(tx, ctx, 'safety_tests', { deviceId: device.id, driverId, tripId, testedAt, expiresAt, result, resultValue: text(i, 'resultValue'), resultUnit: text(i, 'resultUnit'), calibrated, valid, sourceReference: text(i, 'sourceReference'), dispatchDecision: valid ? 'eligible_for_sop_review' : 'hold', vehicleCommandIssued: false });
-    await tx.put('dispatch_holds', { id: tripId, tripId, testId: value.id, held: !valid, reason: valid ? null : 'Missing, failed, expired, tampered or out-of-calibration breath test', reviewedBy: ctx.userId, updatedAt: this.time(), vehicleActuation: false });
+    const assigned = (await tx.list<RecordEntity>('device_assignments')).some(a => a.deviceId === device.id && (a.vehicleId === trip.vehicleId || a.vehicleId === trip.vehicleNumber) && String(a.validFrom) <= testedAt && (!a.validTo || String(a.validTo) > testedAt));
+    const valid = calibrated && assigned && result === 'pass' && expiresAt > this.time();
+    const value = await this.append(tx, ctx, 'safety_tests', { deviceId: device.id, driverId, tripId, testedAt, expiresAt, result, resultValue: text(i, 'resultValue'), resultUnit: text(i, 'resultUnit'), calibrated, assigned, valid, sourceReference: text(i, 'sourceReference'), dispatchDecision: valid ? 'eligible_for_sop_review' : 'hold', vehicleCommandIssued: false });
+    const priorHold = await tx.get<RecordEntity>('dispatch_holds', tripId);
+    if (priorHold?.testedAt && String(priorHold.testedAt) > testedAt) fail(409, 'STALE_BREATH_TEST', 'A newer test already controls the dispatch review');
+    await tx.put('dispatch_holds', { id: tripId, testedAt, expiresAt, tripId, testId: value.id, held: !valid, reason: valid ? null : 'Missing, failed, expired, tampered or out-of-calibration breath test', reviewedBy: ctx.userId, updatedAt: this.time(), vehicleActuation: false });
     return value;
   }
 
@@ -303,16 +326,18 @@ export class ExpansionService {
     await tx.put('warehouse_config', config); await tx.audit('warehouse.authority.configured', id, { authority }); return config;
   }
   private async stockAuthority(tx: Transaction, ctx: Context, facilityId: string, ownerOrganizationId: string) {
-    this.site(ctx, facilityId); const config = await this.required(tx, 'warehouse_config', `${facilityId}:${ownerOrganizationId}`);
+    this.site(ctx, facilityId); this.stockOwner(ctx, ownerOrganizationId); const config = await this.required(tx, 'warehouse_config', `${facilityId}:${ownerOrganizationId}`);
     if (config.authority !== 'cargoorbit_foundation') fail(409, 'EXTERNAL_WMS_AUTHORITY', 'Warehouse writes require the approved external WMS adapter; no local posting is allowed');
   }
+  private stockOwner(ctx: Context, ownerOrganizationId: string) { if (ctx.role === 'warehouse' && (!ctx.organizationId || ctx.organizationId !== ownerOrganizationId)) fail(404, 'NOT_FOUND', 'Stock owner is outside your membership'); }
   private stockId(i: Record<string, unknown>) { return sha({ facilityId: text(i, 'facilityId'), ownerOrganizationId: text(i, 'ownerOrganizationId'), sku: text(i, 'sku'), bin: text(i, 'bin'), unit: text(i, 'unit'), lot: text(i, 'lot', true), condition: choice(i, 'condition', ['available','quarantine','damaged']) }); }
   private async operation(tx: Transaction, id: string, payload: unknown) { const previous = await tx.get<RecordEntity>('expansion_operations', id); if (previous && previous.payloadHash !== sha(payload)) fail(409, 'IDEMPOTENCY_CONFLICT', 'Operation identifier was reused with a different payload'); return previous; }
   private async completed(tx: Transaction, id: string, payload: unknown, result: unknown) { await tx.put('expansion_operations', { id, payloadHash: sha(payload), result, completedAt: this.time() }); return result; }
 
   private async inventoryReceipt(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
-    this.role(ctx, WAREHOUSE); const operationId = `receipt:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
+    this.role(ctx, WAREHOUSE);
     const facilityId = text(i, 'facilityId'), ownerOrganizationId = text(i, 'ownerOrganizationId'); await this.stockAuthority(tx, ctx, facilityId, ownerOrganizationId);
+    const operationId = `receipt:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
     const expected = decimal(i.expectedQuantity, 'expectedQuantity'), accepted = decimal(i.acceptedQuantity, 'acceptedQuantity'), damaged = decimal(i.damagedQuantity, 'damagedQuantity'), short = decimal(i.shortQuantity, 'shortQuantity');
     if (accepted + damaged + short !== expected || expected <= 0n) fail(400, 'QUANTITY_MISMATCH', 'Expected receipt must equal accepted plus damaged plus short');
     const sourceReference = text(i, 'sourceReference'), receivedAt = date(i, 'receivedAt'), movements: RecordEntity[] = [];
@@ -327,21 +352,25 @@ export class ExpansionService {
   }
 
   private async reserve(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
-    this.role(ctx, WAREHOUSE); const operationId = `reserve:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
+    this.role(ctx, WAREHOUSE);
     const stock = await this.required(tx, 'stock', text(i, 'stockId')); await this.stockAuthority(tx, ctx, String(stock.facilityId), String(stock.ownerOrganizationId));
+    const operationId = `reserve:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
     if (stock.condition !== 'available') fail(409, 'STOCK_NOT_AVAILABLE', 'Quarantined or damaged stock cannot be reserved');
     const quantity = decimal(i.quantity), available = decimal(stock.quantity) - decimal(stock.reserved);
     if (quantity <= 0n || quantity > available) fail(409, 'INSUFFICIENT_STOCK', 'Insufficient unreserved stock');
-    const consignmentId = text(i, 'consignmentId'); await this.required(tx, 'consignments', consignmentId);
+    const consignmentId = text(i, 'consignmentId'); const shipment = await this.required(tx, 'consignments', consignmentId);
+    if (shipment.consignorId !== stock.ownerOrganizationId && shipment.stockOwnerOrganizationId !== stock.ownerOrganizationId) fail(403, 'STOCK_OWNER_MISMATCH', 'Stock may only be reserved for its owner shipment');
+    if (shipment.originId && shipment.originId !== stock.facilityId) fail(403, 'STOCK_SITE_MISMATCH', 'Shipment pickup site must match stock location');
     stock.reserved = formatted(decimal(stock.reserved) + quantity); stock.updatedAt = this.time(); await tx.put('stock', stock);
     const result = await this.create(tx, ctx, 'reservations', { stockId: stock.id, facilityId: stock.facilityId, ownerOrganizationId: stock.ownerOrganizationId, quantity: formatted(quantity), consignmentId, status: 'reserved', operationId });
     return this.completed(tx, operationId, i, result);
   }
 
   private async pick(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
-    this.role(ctx, WAREHOUSE); const operationId = `pick:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
+    this.role(ctx, WAREHOUSE);
     const reservation = await this.required(tx, 'reservations', text(i, 'reservationId')), stock = await this.required(tx, 'stock', String(reservation.stockId));
     await this.stockAuthority(tx, ctx, String(stock.facilityId), String(stock.ownerOrganizationId));
+    const operationId = `pick:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
     if (reservation.status !== 'reserved') fail(409, 'RESERVATION_NOT_OPEN', 'Reservation was already consumed or cancelled');
     if (text(i, 'scannedSku') !== stock.sku || text(i, 'scannedBin') !== stock.bin || text(i, 'scannedUnit') !== stock.unit) fail(409, 'SCAN_MISMATCH', 'Scanned SKU, bin or unit does not match the reservation');
     const quantity = decimal(reservation.quantity);
@@ -353,7 +382,7 @@ export class ExpansionService {
   }
 
   private async count(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
-    this.role(ctx, WAREHOUSE); const stock = await this.required(tx, 'stock', text(i, 'stockId')); this.site(ctx, String(stock.facilityId));
+    this.role(ctx, WAREHOUSE); const stock = await this.required(tx, 'stock', text(i, 'stockId')); this.site(ctx, String(stock.facilityId)); this.stockOwner(ctx, String(stock.ownerOrganizationId));
     const observedQuantity = formatted(decimal(i.observedQuantity, 'observedQuantity'));
     return this.create(tx, ctx, 'counts', { stockId: stock.id, facilityId: stock.facilityId, ownerOrganizationId: stock.ownerOrganizationId, expectedSnapshot: stock.quantity, observedQuantity, source: choice(i, 'source', ['handheld','camera','drone','manual']), sourceReference: text(i, 'sourceReference'), confidence: i.confidence === undefined ? null : number(i, 'confidence', 0, 1), status: 'awaiting_review', stockUpdatedAt: stock.updatedAt });
   }
@@ -372,26 +401,29 @@ export class ExpansionService {
   }
 
   private async dockReads(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
-    this.role(ctx, WAREHOUSE); const operationId = `dock:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
-    const facilityId = text(i, 'facilityId'); this.site(ctx, facilityId); await this.required(tx, 'facilities', facilityId);
+    this.role(ctx, WAREHOUSE);
+    const facilityId = text(i, 'facilityId'), ownerOrganizationId = text(i, 'ownerOrganizationId'); this.site(ctx, facilityId); this.stockOwner(ctx, ownerOrganizationId); await this.required(tx, 'facilities', facilityId); await this.required(tx, 'organizations', ownerOrganizationId);
+    const operationId = `dock:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
     const expected = i.expectedIds, reads = i.readIds;
     if (!Array.isArray(expected) || !Array.isArray(reads) || expected.length > 10000 || reads.length > 10000 || [...expected,...reads].some(v => typeof v !== 'string' || v.length > 200)) fail(400, 'INVALID_READS', 'expectedIds and readIds must be bounded arrays of identifiers');
     const unique = [...new Set(reads as string[])], expectedIds = [...new Set(expected as string[])], missing = expectedIds.filter(v => !unique.includes(v)), unexpected = unique.filter(v => !expectedIds.includes(v));
-    const value = await this.append(tx, ctx, 'dock_reads', { facilityId, dockId: text(i, 'dockId'), expectedIds, readIds: unique, duplicateCount: reads.length - unique.length, missing, unexpected, direction: choice(i, 'direction', ['in','out','ambiguous']), sourceReference: text(i, 'sourceReference'), reconciliationRequired: missing.length > 0 || unexpected.length > 0 || i.direction === 'ambiguous', stockPosted: false, receiptConfirmed: false });
+    const value = await this.append(tx, ctx, 'dock_reads', { facilityId, ownerOrganizationId, dockId: text(i, 'dockId'), expectedIds, readIds: unique, duplicateCount: reads.length - unique.length, missing, unexpected, direction: choice(i, 'direction', ['in','out','ambiguous']), sourceReference: text(i, 'sourceReference'), reconciliationRequired: missing.length > 0 || unexpected.length > 0 || i.direction === 'ambiguous', stockPosted: false, receiptConfirmed: false });
     return this.completed(tx, operationId, i, value);
   }
 
   private async registerAsset(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
     this.role(ctx, WAREHOUSE); const serial = text(i, 'serial'), facilityId = text(i, 'facilityId'), ownerOrganizationId = text(i, 'ownerOrganizationId');
-    this.site(ctx, facilityId); await this.required(tx, 'facilities', facilityId); await this.required(tx, 'organizations', ownerOrganizationId);
+    this.site(ctx, facilityId); this.stockOwner(ctx, ownerOrganizationId); await this.required(tx, 'facilities', facilityId); await this.required(tx, 'organizations', ownerOrganizationId);
     if ((await tx.list<RecordEntity>('returnable_assets')).some(v => v.serial === serial && v.ownerOrganizationId === ownerOrganizationId)) fail(409, 'ASSET_EXISTS', 'An asset with this owner and serial already exists');
     return this.create(tx, ctx, 'returnable_assets', { serial, ownerOrganizationId, facilityId, assetType: choice(i, 'assetType', ['rack','bin','pallet','other']), identifierStandard: choice(i, 'identifierStandard', ['internal','grai']), custodianOrganizationId: ownerOrganizationId, status: 'returned', condition: 'serviceable', currentShipmentId: null });
   }
 
   private async handoverAsset(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
-    this.role(ctx, WAREHOUSE); const operationId = `asset:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
-    const asset = await this.required(tx, 'returnable_assets', text(i, 'assetId')); this.site(ctx, String(asset.facilityId));
+    this.role(ctx, WAREHOUSE);
+    const asset = await this.required(tx, 'returnable_assets', text(i, 'assetId')); this.site(ctx, String(asset.facilityId)); this.stockOwner(ctx, String(asset.ownerOrganizationId));
     const status = choice(i, 'status', ['issued','in_transit','at_customer','return_due','returned','under_repair','lost','retired']);
+    if (['lost','retired'].includes(status)) this.role(ctx, ['owner']);
+    const operationId = `asset:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
     const transitions: Record<string,string[]> = { returned: ['issued','under_repair','retired'], issued: ['in_transit','returned','lost'], in_transit: ['at_customer','returned','lost'], at_customer: ['return_due','in_transit','returned','lost'], return_due: ['in_transit','returned','lost'], under_repair: ['returned','retired'], lost: ['returned','retired'], retired: [] };
     if (!transitions[String(asset.status)]?.includes(status)) fail(409, 'ASSET_TRANSITION', 'Invalid asset custody transition');
     if (['lost','retired'].includes(status)) this.role(ctx, ['owner']);
@@ -410,8 +442,150 @@ export class ExpansionService {
   private async commissioning(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,P2);return this.create(tx,ctx,'commissioning',{deviceId:text(i,'deviceId'),signedChecklist:text(i,'signedChecklist'),capabilityTest:text(i,'capabilityTest'),supportOwner:text(i,'supportOwner'),outcome:choice(i,'outcome',['passed','failed']),reference:text(i,'reference')});}
   private async investment(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,FINANCE);const cost=decimal(i.initialCost),benefit=decimal(i.monthlyBenefit),operating=decimal(i.monthlyOperatingCost),net=benefit-operating;return this.create(tx,ctx,'investments',{name:text(i,'name'),initialCost:formatted(cost),monthlyBenefit:formatted(benefit),monthlyOperatingCost:formatted(operating),netMonthlyBenefit:formatted(net),paybackMonths:net>0?Number(cost)/Number(net):null,meetsTarget:net>0&&cost<=net*24n,baselineEvidence:text(i,'baselineEvidence'),status:'pending_review'});}
   private async approveInvestment(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,['owner']);const value=await this.required(tx,'investments',text(i,'investmentId'));if(!value.meetsTarget)value.exceptionReason=text(i,'exceptionReason');value.status='approved';value.approvedBy=ctx.userId;value.reference=text(i,'reference');await tx.put('investments',value);await tx.audit('investment.approved',value.id,{});return value;}
-  private async planMission(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,WAREHOUSE);const facilityId=text(i,'facilityId');this.site(ctx,facilityId);return this.create(tx,ctx,'automation_missions',{facilityId,vendor:text(i,'vendor'),missionType:choice(i,'missionType',['move','count']),route:text(i,'route'),safetyApproval:text(i,'safetyApproval'),status:'planned',dispatchedToHardware:false});}
-  private async missionOutcome(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,WAREHOUSE);const value=await this.required(tx,'automation_missions',text(i,'missionId'));this.site(ctx,String(value.facilityId));if(['completed','failed','cancelled'].includes(String(value.status)))fail(409,'TERMINAL_MISSION','Mission is already terminal');const status=choice(i,'status',['accepted','running','completed','failed','cancelled']);if(value.status==='running'&&status==='accepted')fail(409,'REGRESSION','Mission cannot regress');value.status=status;value.vendorReference=text(i,'vendorReference');await tx.put('automation_missions',value);await tx.audit('mission.outcome',value.id,{status});return value;}
-  private async stockObservation(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,WAREHOUSE);const facilityId=text(i,'facilityId');this.site(ctx,facilityId);return this.create(tx,ctx,'stock_observations',{facilityId,sku:text(i,'sku'),estimatedQuantity:formatted(decimal(i.estimatedQuantity)),method:choice(i,'method',['weight','vision','drone']),confidence:number(i,'confidence',0,1),source:text(i,'source'),status:'requires_physical_review',stockAdjusted:false});}
+  private async planMission(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,WAREHOUSE);const facilityId=text(i,'facilityId');this.site(ctx,facilityId);await this.required(tx,'facilities',facilityId);return this.create(tx,ctx,'automation_missions',{facilityId,ownerOrganizationId:ctx.organizationId||text(i,'ownerOrganizationId',true)||null,vendor:text(i,'vendor'),missionType:choice(i,'missionType',['move','count']),route:text(i,'route'),safetyApproval:text(i,'safetyApproval'),status:'planned',dispatchedToHardware:false});}
+  private async missionOutcome(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,WAREHOUSE);const value=await this.required(tx,'automation_missions',text(i,'missionId'));this.site(ctx,String(value.facilityId));this.stockOwner(ctx,String(value.ownerOrganizationId));if(['completed','failed','cancelled'].includes(String(value.status)))fail(409,'TERMINAL_MISSION','Mission is already terminal');const status=choice(i,'status',['accepted','running','completed','failed','cancelled']);const transitions:Record<string,string[]>={planned:['accepted','cancelled'],accepted:['running','failed','cancelled'],running:['completed','failed','cancelled']};if(!transitions[String(value.status)]?.includes(status))fail(409,'REGRESSION','Mission outcome is out of sequence');value.status=status;value.vendorReference=text(i,'vendorReference');await tx.put('automation_missions',value);await tx.audit('mission.outcome',value.id,{status});return value;}
+  private async stockObservation(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,WAREHOUSE);const facilityId=text(i,'facilityId');this.site(ctx,facilityId);await this.required(tx,'facilities',facilityId);return this.create(tx,ctx,'stock_observations',{facilityId,ownerOrganizationId:ctx.organizationId||text(i,'ownerOrganizationId',true)||null,sku:text(i,'sku'),estimatedQuantity:formatted(decimal(i.estimatedQuantity)),method:choice(i,'method',['weight','vision','drone']),confidence:number(i,'confidence',0,1),source:text(i,'source'),status:'requires_physical_review',stockAdjusted:false});}
   private async maintenance(tx:Transaction,ctx:Context,i:Record<string,unknown>){this.role(ctx,P2);return this.create(tx,ctx,'maintenance',{vehicleId:text(i,'vehicleId'),serviceType:text(i,'serviceType'),dueAt:date(i,'dueAt'),source:text(i,'source'),status:'due',predictive:false});}
+  private async closeAssignment(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, P2); const a = await this.required(tx, 'device_assignments', text(i, 'assignmentId'));
+    const validTo = date(i, 'validTo'); if (validTo <= String(a.validFrom) || validTo > this.time()) fail(400, 'INVALID_INTERVAL', 'Assignment close must follow start and cannot be future dated');
+    if (a.validTo) fail(409, 'ASSIGNMENT_CLOSED', 'Assignment already closed');
+    const observations = (await tx.list<RecordEntity>('observations')).filter(o => o.assignmentId === a.id);
+    if (observations.some(o => String(o.occurredAt) >= validTo)) fail(409, 'HISTORICAL_ASSIGNMENT', 'Closing would invalidate retained observations; use a reviewed correction');
+    a.validTo = validTo; a.closedBy = ctx.userId; a.reason = text(i, 'reason'); await tx.put('device_assignments', a); await tx.audit('device.assignment.closed', a.id, { validTo }); return a;
+  }
+
+  private async cancelReservation(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, WAREHOUSE); const r = await this.required(tx, 'reservations', text(i, 'reservationId'));
+    const stock = await this.required(tx, 'stock', String(r.stockId)); await this.stockAuthority(tx, ctx, String(stock.facilityId), String(stock.ownerOrganizationId));
+    if (r.status !== 'reserved') fail(409, 'RESERVATION_NOT_OPEN', 'Only an unconsumed reservation may be cancelled');
+    if (decimal(stock.reserved) < decimal(r.quantity)) fail(409, 'STOCK_CONFLICT', 'Reserved balance is inconsistent');
+    stock.reserved = formatted(decimal(stock.reserved) - decimal(r.quantity)); stock.updatedAt = this.time();
+    r.status = 'cancelled'; r.cancelledAt = this.time(); r.reason = text(i, 'reason'); await tx.put('stock', stock); await tx.put('reservations', r); await tx.audit('reservation.cancelled', r.id, { reason: r.reason }); return r;
+  }
+
+  private async registerHandlingUnit(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, WAREHOUSE); const facilityId = text(i, 'facilityId'), ownerOrganizationId = text(i, 'ownerOrganizationId');
+    this.site(ctx, facilityId); this.stockOwner(ctx, ownerOrganizationId); await this.required(tx, 'facilities', facilityId); await this.required(tx, 'organizations', ownerOrganizationId);
+    const identifier = text(i, 'identifier'), consignmentId = text(i, 'consignmentId'), standard = choice(i, 'identifierStandard', ['internal','sscc']);
+    if (standard === 'sscc') {
+      if (!/^\d{18}$/.test(identifier)) fail(400, 'SSCC_FORMAT', 'SSCC must be exactly 18 digits');
+      const sum = [...identifier.slice(0, 17)].reduce((total, digit, index) => total + Number(digit) * (index % 2 === 0 ? 3 : 1), 0);
+      if ((10 - sum % 10) % 10 !== Number(identifier[17])) fail(400, 'SSCC_CHECK_DIGIT', 'SSCC check digit is invalid');
+      text(i, 'gs1AllocationReference');
+    }
+    if ((await tx.list<RecordEntity>('handling_units')).some(u => u.identifier === identifier)) fail(409, 'HANDLING_ID_EXISTS', 'Handling unit identifier already exists');
+    const shipment = await this.required(tx, 'consignments', consignmentId);
+    if (shipment.consignorId !== ownerOrganizationId && shipment.stockOwnerOrganizationId !== ownerOrganizationId) fail(403, 'STOCK_OWNER_MISMATCH', 'Handling unit owner must match shipment goods owner');
+    const raw = i.contents; if (!Array.isArray(raw) || raw.length > 500) fail(400, 'CONTENTS_REQUIRED', 'contents must be a bounded array of line allocations');
+    const contents = raw.map(v => { const entry = object(v); return { lineId: text(entry, 'lineId'), quantity: formatted(decimal(entry.quantity)) }; });
+    if (new Set(contents.map(c => c.lineId)).size !== contents.length) fail(400, 'DUPLICATE_LINE', 'Each line may occur once within a handling unit');
+    const units = (await tx.list<RecordEntity>('handling_units')).filter(u => u.consignmentId === consignmentId && u.status !== 'retired');
+    for (const c of contents) {
+      const line = (shipment.lines as Record<string, unknown>[] | undefined)?.find(l => l.id === c.lineId);
+      if (!line || decimal(c.quantity) <= 0n) fail(400, 'LINE_ALLOCATION', 'Allocate positive quantities from the shipment lines');
+      const prior = units.flatMap(u => Array.isArray(u.contents) ? u.contents as Record<string, unknown>[] : []).filter(l => l.lineId === c.lineId).reduce((sum, l) => sum + decimal(l.quantity), 0n);
+      if (prior + decimal(c.quantity) > decimal(line.quantity)) fail(409, 'HANDLING_OVERALLOCATION', 'Handling unit allocations exceed shipment quantity');
+    }
+    const unit = await this.create(tx, ctx, 'handling_units', { identifier, identifierStandard: standard, gs1AllocationReference: text(i, 'gs1AllocationReference', true) || null, ownerOrganizationId, facilityId, consignmentId, unitType: choice(i, 'unitType', ['pallet','box','parcel']), contents, childIds: [], parentId: null, status: 'at_facility', revision: 1 });
+    await this.append(tx, ctx, 'handling_unit_events', { unitId: unit.id, facilityId, ownerOrganizationId, event: 'registered', snapshot: unit, receiptConfirmed: false }); return unit;
+  }
+
+  private async aggregateHandlingUnits(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, WAREHOUSE); const parent = await this.required(tx, 'handling_units', text(i, 'parentId'));
+    this.site(ctx, String(parent.facilityId)); this.stockOwner(ctx, String(parent.ownerOrganizationId));
+    if (parent.status !== 'at_facility' || parent.parentId || parent.unitType !== 'pallet' || (parent.contents as unknown[]).length) fail(409, 'AGGREGATION_STATE', 'Use an uncontained stationary pallet with no directly allocated contents');
+    const ids = i.childIds; if (!Array.isArray(ids) || ids.length > 500 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) fail(400, 'INVALID_CHILDREN', 'childIds must be unique handling-unit IDs');
+    if (parent.revision !== number(i, 'expectedRevision', 1)) fail(409, 'STALE_AGGREGATION', 'Pallet was changed; reload before repacking');
+    const oldIds = Array.isArray(parent.childIds) ? parent.childIds as string[] : [];
+    for (const id of ids as string[]) {
+      const child = await this.required(tx, 'handling_units', id);
+      if (id === parent.id || child.unitType === 'pallet' || child.parentId && child.parentId !== parent.id || child.facilityId !== parent.facilityId || child.ownerOrganizationId !== parent.ownerOrganizationId || child.consignmentId !== parent.consignmentId || child.status !== 'at_facility') fail(409, 'CHILD_SCOPE', 'Each child must be an available uncontained box/parcel for the same owner, shipment and facility');
+      child.parentId = parent.id; child.revision = Number(child.revision) + 1; await tx.put('handling_units', child);
+    }
+    for (const id of oldIds.filter(id => !ids.includes(id))) { const child = await this.required(tx, 'handling_units', id); child.parentId = null; child.revision = Number(child.revision) + 1; await tx.put('handling_units', child); }
+    const before = [...oldIds]; parent.childIds = ids; parent.revision = Number(parent.revision) + 1; await tx.put('handling_units', parent);
+    await this.append(tx, ctx, 'handling_unit_events', { unitId: parent.id, facilityId: parent.facilityId, ownerOrganizationId: parent.ownerOrganizationId, event: 'repacked', beforeChildIds: before, afterChildIds: ids, reason: text(i, 'reason'), revision: parent.revision, receiptConfirmed: false }); return parent;
+  }
+
+  private async scanHandlingUnit(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, WAREHOUSE); const unit = await this.required(tx, 'handling_units', text(i, 'unitId'));
+    this.site(ctx, String(unit.facilityId)); this.stockOwner(ctx, String(unit.ownerOrganizationId));
+    const operationId = `handling:${text(i, 'operationId')}`, prior = await this.operation(tx, operationId, i); if (prior) return prior.result;
+    if (unit.parentId) fail(409, 'SCAN_PARENT', 'Scan the containing pallet or disaggregate it before individual custody scans');
+    if (unit.revision !== number(i, 'expectedRevision', 1)) fail(409, 'STALE_HANDLING_UNIT', 'Handling unit changed before this scan');
+    const event = choice(i, 'event', ['loaded','dispatched','transferred','unloaded','received']), facilityId = text(i, 'facilityId');
+    const transitions: Record<string, string[]> = { at_facility: ['loaded','received'], loaded: ['dispatched','unloaded'], dispatched: ['transferred','unloaded'], transferred: ['transferred','unloaded'], unloaded: ['received','loaded'], received: ['loaded'] };
+    if (!transitions[String(unit.status)]?.includes(event)) fail(409, 'CUSTODY_SEQUENCE', 'Custody scan is out of sequence');
+    this.site(ctx, facilityId); await this.required(tx, 'facilities', facilityId);
+    if (!['transferred','unloaded'].includes(event) && facilityId !== unit.facilityId) fail(409, 'CUSTODY_LOCATION', 'Only a transfer or unloading scan can change facility custody');
+    const occurredAt = date(i, 'occurredAt');
+    if (occurredAt > this.time() || unit.lastScanAt && occurredAt < String(unit.lastScanAt)) fail(409, 'SCAN_TIME', 'Late or future custody scans require review');
+    const childIds = Array.isArray(unit.childIds) ? unit.childIds as string[] : [];
+    const affected = [unit, ...await Promise.all(childIds.map(id => this.required(tx, 'handling_units', id)))];
+    for (const u of affected) { if (u.facilityId !== unit.facilityId || u.ownerOrganizationId !== unit.ownerOrganizationId) fail(409, 'CUSTODY_CONFLICT', 'Aggregated unit custody does not reconcile'); }
+    const snapshots = affected.map(u => ({ id: u.id, identifier: u.identifier, contents: u.contents, parentId: u.parentId, revision: u.revision }));
+    for (const u of affected) { u.status = event; u.facilityId = facilityId; u.lastScanAt = occurredAt; u.revision = Number(u.revision) + 1; await tx.put('handling_units', u); }
+    const record = await this.append(tx, ctx, 'handling_unit_events', { unitId: unit.id, facilityId, ownerOrganizationId: unit.ownerOrganizationId, event, occurredAt, sourceReference: text(i, 'sourceReference'), affectedUnits: snapshots, operationId, receiptConfirmed: false });
+    return this.completed(tx, operationId, i, record);
+  }
+
+  private async calculateEta(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, P2); const trip = await this.required(tx, 'trips', text(i, 'tripId'));
+    const position = await tx.get<RecordEntity>('positions', text(i, 'vehicleId'));
+    if (trip.vehicleNumber !== i.vehicleId && trip.vehicleId !== i.vehicleId) fail(400, 'VEHICLE_TRIP_MISMATCH', 'ETA vehicle does not match the selected trip');
+    const ageSeconds = position ? Math.max(0, (this.now().getTime() - Date.parse(String(position.occurredAt))) / 1000) : null;
+    const fresh = ageSeconds !== null && ageSeconds <= number(i, 'maximumSignalAgeSeconds', 30, 3600);
+    const remainingKm = number(i, 'remainingKm', 0, 10000), assumedSpeedKmh = number(i, 'assumedSpeedKmh', 1, 100), serviceMinutes = number(i, 'serviceMinutes', 0, 1440), uncertaintyMinutes = number(i, 'uncertaintyMinutes', 1, 1440);
+    const estimate = fresh ? new Date(this.now().getTime() + (remainingKm / assumedSpeedKmh * 60 + serviceMinutes) * 60000).toISOString() : null;
+    return this.append(tx, ctx, 'eta_estimates', { tripId: trip.id, vehicleId: i.vehicleId, positionId: position?.observationId || null, observationTime: position?.occurredAt || null, signalAgeSeconds: ageSeconds, method: 'operator_distance_and_speed_rule_v1', inputs: { remainingKm, assumedSpeedKmh, serviceMinutes, uncertaintyMinutes }, inputSource: text(i, 'inputSource'), estimate, earliest: estimate ? new Date(Date.parse(estimate) - uncertaintyMinutes * 60000).toISOString() : null, latest: estimate ? new Date(Date.parse(estimate) + uncertaintyMinutes * 60000).toISOString() : null, status: fresh ? 'estimated' : 'unknown_stale_or_missing_signal', trafficModelUsed: false, receiptConfirmed: false });
+  }
+
+  private async completeMaintenance(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, P2); const record = await this.required(tx, 'maintenance', text(i, 'maintenanceId'));
+    if (record.status !== 'due') fail(409, 'MAINTENANCE_CLOSED', 'Maintenance reminder was already completed');
+    const completedAt = date(i, 'completedAt'); if (completedAt > this.time()) fail(400, 'FUTURE_COMPLETION', 'Service completion cannot be future dated');
+    const event = await this.append(tx, ctx, 'maintenance_events', { maintenanceId: record.id, vehicleId: record.vehicleId, completedAt, serviceReference: text(i, 'serviceReference'), notes: text(i, 'notes'), certifiesRoadworthiness: false });
+    record.status = 'completed'; record.completionEventId = event.id; await tx.put('maintenance', record); return record;
+  }
+
+  private async transportPlan(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, P2); const vehicleId = text(i, 'vehicleId'), capacityKg = decimal(i.capacityKg), availableAt = date(i, 'availableAt'), dutyEnd = date(i, 'dutyEnd');
+    if (dutyEnd <= availableAt || capacityKg <= 0n) fail(400, 'PLANNING_BOUNDS', 'Provide positive capacity and an available duty window');
+    const raw = i.stops; if (!Array.isArray(raw) || raw.length < 1 || raw.length > 100) fail(400, 'PLANNING_STOPS', 'Provide one to 100 proposed delivery stops');
+    const seen = new Set<string>(), stops: Record<string, unknown>[] = [];
+    for (const value of raw) {
+      const stop = object(value), consignmentId = text(stop, 'consignmentId'), consignment = await this.required(tx, 'consignments', consignmentId);
+      if (seen.has(consignmentId)) fail(400, 'DUPLICATE_STOP', 'A consignment can occur once in this delivery-only plan'); seen.add(consignmentId);
+      if (['cancelled','delivered'].includes(String(consignment.status))) fail(409, 'SHIPMENT_NOT_OPEN', 'Plan contains completed or cancelled work');
+      const windowStart = date(stop, 'windowStart'), windowEnd = date(stop, 'windowEnd'); if (windowEnd < windowStart) fail(400, 'WINDOW_INVALID', 'Delivery window must not be reversed');
+      stops.push({ consignmentId, destinationId: consignment.destinationId, weightKg: formatted(decimal(stop.weightKg)), cargoClass: text(stop, 'cargoClass'), windowStart, windowEnd, serviceMinutes: number(stop, 'serviceMinutes', 0, 1440), shipmentUpdatedAt: consignment.updatedAt || null });
+    }
+    const classes = i.allowedCargoClasses; if (!Array.isArray(classes) || classes.length < 1 || classes.some(v => typeof v !== 'string')) fail(400, 'CARGO_CLASSES', 'List the vehicle permitted cargo classes');
+    const travel = object(i.travelMinutes), source = text(i, 'travelDataSource');
+    let time = Date.parse(availableAt), location = 'origin', load = 0n; const assigned: Record<string, unknown>[] = [], unserved: Record<string, unknown>[] = [];
+    // Deterministic earliest-window heuristic, not a global optimum or traffic predictor.
+    for (const stop of stops.sort((a, b) => String(a.windowEnd).localeCompare(String(b.windowEnd)) || String(a.consignmentId).localeCompare(String(b.consignmentId)))) {
+      const weight = decimal(stop.weightKg), key = `${location}->${String(stop.consignmentId)}`, minutes = travel[key];
+      let reason: string | null = null;
+      if (!classes.includes(stop.cargoClass)) reason = 'cargo_not_compatible';
+      else if (load + weight > capacityKg) reason = 'vehicle_capacity';
+      else if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < 0 || minutes > 14400) reason = 'missing_travel_time';
+      const arrival = Math.max(time + Number(minutes || 0) * 60000, Date.parse(String(stop.windowStart))), departure = arrival + Number(stop.serviceMinutes) * 60000;
+      if (!reason && arrival > Date.parse(String(stop.windowEnd))) reason = 'delivery_window';
+      if (!reason && departure > Date.parse(dutyEnd)) reason = 'driver_duty_window';
+      if (reason) { unserved.push({ ...stop, reason }); continue; }
+      assigned.push({ ...stop, travelMinutes: minutes, arrival: new Date(arrival).toISOString(), departure: new Date(departure).toISOString() }); time = departure; location = String(stop.consignmentId); load += weight;
+    }
+    return this.create(tx, ctx, 'route_plans', { vehicleId, driverId: text(i, 'driverId'), capacityKg: formatted(capacityKg), totalLoadedKg: formatted(load), availableAt, dutyEnd, allowedCargoClasses: classes, assigned, unserved, source, travelMinutes: travel, method: 'earliest_window_delivery_heuristic_v1', status: 'proposed', releaseRequired: true, globallyOptimal: false, assumptions: 'Delivery-only route with all cargo loaded at origin; operator-provided travel times; no automatic trip assignment.' });
+  }
+
+  private async releasePlan(tx: Transaction, ctx: Context, i: Record<string, unknown>) {
+    this.role(ctx, ['owner','operations']); const plan = await this.required(tx, 'route_plans', text(i, 'planId'));
+    if (plan.status !== 'proposed') fail(409, 'PLAN_ALREADY_RELEASED', 'Plan was already reviewed');
+    const assigned = plan.assigned as Record<string, unknown>[]; if (!assigned.length) fail(409, 'NO_FEASIBLE_WORK', 'Cannot release an empty route');
+    if ((plan.unserved as unknown[]).length && i.acknowledgeUnserved !== true) fail(400, 'UNSERVED_REVIEW', 'Explicitly acknowledge unserved work before release');
+    for (const stop of assigned) { const c = await this.required(tx, 'consignments', String(stop.consignmentId)); if ((c.updatedAt || null) !== stop.shipmentUpdatedAt || ['cancelled','delivered'].includes(String(c.status))) fail(409, 'STALE_PLAN', 'Shipment changed after planning; generate a fresh plan'); }
+    plan.status = 'released'; plan.releasedAt = this.time(); plan.releasedBy = ctx.userId; plan.reviewReference = text(i, 'reviewReference'); await tx.put('route_plans', plan); await tx.audit('transport_plan.released', plan.id, { assigned: assigned.length, unserved: (plan.unserved as unknown[]).length }); return plan;
+  }
 }

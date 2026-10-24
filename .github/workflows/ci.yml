@@ -2,40 +2,113 @@ name: CargoOrbit CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: cargoorbit-ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-alpine
         env:
           POSTGRES_DB: cargoorbit_test
           POSTGRES_PASSWORD: test-migration-password
-        ports:
-          - 5432:5432
+        ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U postgres -d cargoorbit_test'
+          --health-cmd "pg_isready -U postgres -d cargoorbit_test"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       MIGRATION_DATABASE_URL: postgresql://postgres:test-migration-password@localhost:5432/cargoorbit_test
       RUNTIME_DATABASE_PASSWORD: test-runtime-password-12345
       DATABASE_URL: postgresql://cargoorbit_runtime:test-runtime-password-12345@localhost:5432/cargoorbit_test
       TEST_DATABASE_URL: postgresql://cargoorbit_runtime:test-runtime-password-12345@localhost:5432/cargoorbit_test
+      JWT_SECRET: ci-only-jwt-secret-not-for-deployment-123456789
+      OTP_SECRET: ci-only-otp-secret-not-for-deployment-987654321
+      MFA_ENCRYPTION_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
+        with: {node-version: 24, cache: npm}
       - run: npm ci
       - run: npm run build -w @cargoorbit/database
       - run: npm run build -w @cargoorbit/domain
-      - run: npm run typecheck
       - run: npm run db:migrate
-      - run: npx tsx scripts/provision-runtime.ts
-      - run: npm test
+      - name: Verify migration checksums and repeat execution
+        run: npm run db:migrate
+      - run: npm run db:provision
+      - run: npm run typecheck
+      - name: Unit and real PostgreSQL integration tests
+        run: npm test
       - run: npm run build
-      - run: npx expo install --check
+      - name: Native dependency compatibility
+        run: npx expo install --check
         working-directory: apps/mobile
+      - name: Operator script syntax
+        run: |
+          node --check scripts/backup-database.mjs
+          node --check scripts/restore-drill.mjs
+          node --check scripts/release-readiness.mjs
+      - name: Require unresolved production gates to fail closed
+        run: |
+          if node scripts/release-readiness.mjs > /tmp/cargoorbit-readiness.json; then
+            echo "Readiness must not pass without production evidence."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-gate-check
+          path: /tmp/cargoorbit-readiness.json
+          if-no-files-found: ignore
+  server-dependencies:
+    name: Server dependency security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - run: npm ci --ignore-scripts
+      - name: API and web production dependency vulnerability gate
+        run: npm audit --omit=dev --audit-level=high --workspace=@cargoorbit/api --workspace=@cargoorbit/web
+  mobile-toolchain-security:
+    name: Mobile toolchain security (release blocker until upstream patch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - run: npm ci --ignore-scripts
+      - name: Full production workspace audit; no advisory waivers
+        run: npm audit --omit=dev --audit-level=high
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [verify, server-dependencies]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release image without publishing
+        run: docker build --build-arg NEXT_PUBLIC_API_URL=https://example.invalid/v1 --tag cargoorbit:ci .
+      - name: Verify non-root image configuration
+        run: test "$(docker image inspect cargoorbit:ci --format '{{.Config.User}}')" = node
+      - name: Verify server image excludes mobile signing tools
+        run: docker run --rm --entrypoint sh cargoorbit:ci -c 'test ! -d node_modules/expo && test ! -d node_modules/@expo/cli && test ! -d node_modules/node-forge'
+      - name: Smoke test web startup from the production image
+        run: |
+          docker run --detach --name cargoorbit-web-smoke --read-only --tmpfs /tmp --publish 127.0.0.1:3000:3000 cargoorbit:ci npm run start --workspace=@cargoorbit/web
+          trap 'docker logs cargoorbit-web-smoke; docker rm --force cargoorbit-web-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/ > /tmp/cargoorbit-web.html; then
+              rg --quiet CargoOrbit /tmp/cargoorbit-web.html
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1

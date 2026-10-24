@@ -1,0 +1,18 @@
+{$APP_DOMAIN} {
+  encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    -Server
+  }
+  request_body {
+    max_size 12MB
+  }
+  handle /v1/* {
+    reverse_proxy api:4000
+  }
+  handle {
+    reverse_proxy web:3000
+  }
+  # Avoid recording query strings, Authorization or cookies in this reference config.
+  # Configure approved structured access logs and retention outside this file.
+}

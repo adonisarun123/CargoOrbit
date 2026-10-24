@@ -1,0 +1,7 @@
+import {afterEach,describe,it,expect,vi} from 'vitest';
+import {cachedReadiness} from '../apps/api/src/health';
+afterEach(()=>vi.useRealTimers());
+describe('Bounded public readiness checks',()=>{
+ it('coalesces concurrent probes and caches both healthy and unhealthy outcomes',async()=>{vi.useFakeTimers();let resolve!:()=>void;const check=vi.fn(()=>new Promise<void>(r=>{resolve=r})),ready=cachedReadiness(check,15000,6000);const first=ready(),second=ready();await Promise.resolve();expect(check).toHaveBeenCalledTimes(1);resolve();expect(await first).toBe(true);expect(await second).toBe(true);expect(await ready()).toBe(true);expect(check).toHaveBeenCalledTimes(1);await vi.advanceTimersByTimeAsync(15001);check.mockImplementation(()=>Promise.reject(new Error('Unavailable')));expect(await ready()).toBe(false);expect(await ready()).toBe(false);expect(check).toHaveBeenCalledTimes(2);});
+ it('aborts slow dependencies and does not pile up probes if they ignore cancellation',async()=>{vi.useFakeTimers();let signal:AbortSignal|undefined;const check=vi.fn((s:AbortSignal)=>{signal=s;return new Promise<void>(()=>{})}),ready=cachedReadiness(check,15000,6000);const probe=ready();await vi.advanceTimersByTimeAsync(6001);expect(await probe).toBe(false);expect(signal?.aborted).toBe(true);await vi.advanceTimersByTimeAsync(15001);expect(await ready()).toBe(false);expect(check).toHaveBeenCalledTimes(1);});
+});

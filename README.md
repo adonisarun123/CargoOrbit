@@ -2,7 +2,7 @@
 
 Delivery evidence, authorized receiver acknowledgement, billing readiness and freight collections for Indian transport operations. Built from the supplied Viskan SRS v2 (24 October 2026), with CargoOrbit as the product name.
 
-**Status: runnable engineering baseline, not a certified production release or a claim that all 104 SRS requirements are finished.** Core M workflows are implemented, with executable P2/P3 business modules and selected P4 workflow foundations. See [requirement coverage](docs/REQUIREMENTS.md) for exact boundaries and [release gates](docs/OPERATIONS.md) before real customer use.
+**Status: hardened release candidate; production acceptance remains gated.** The repository includes the web portal, API/worker, Android source, migrations, deployment/recovery tooling and automated regression suites. M delivery/billing controls and phase-gated P2/P3/selected P4 workflows are implemented to the boundaries below. This does not claim all 104 SRS requirements or real provider/device acceptance are complete. See [requirement coverage](docs/REQUIREMENTS.md) for exact boundaries and [release gates](docs/OPERATIONS.md) before real customer use.
 
 ## Applications
 
@@ -41,7 +41,7 @@ Seeding creates fictional companies and six consignments. Sign in with `owner@ca
 
 For local-only photo experiments without ClamAV, `MALWARE_SCANNER=development-clean` is an explicit unsafe development bypass. Production rejects it. Do not use real evidence with that setting.
 
-Development receiver OTPs are held in process memory and available only to the receiver account through `GET /v1/dev/otp`. Production disables this route and requires a configured message adapter. Enrollment currently uses verified account email contacts; a separately verified phone enrollment and DLT/SMS template integration must precede real SMS usage.
+Development receiver OTPs are held in process memory and available only to the receiver account through `GET /v1/dev/otp`. Production disables this route and requires a configured message adapter. Self-service contact verification supports email and E.164 phone contacts, requires fresh authentication and a delivered OTP, and revokes sessions/receiver grants on change. Approved message templates and provider acceptance remain prerequisites for live delivery.
 
 ### Walkthrough
 
@@ -52,7 +52,7 @@ Development receiver OTPs are held in process memory and available only to the r
 5. The accepted version becomes immutable. The worker generates its PDF and hash manifest. Corrections create a new linked draft.
 6. Finance clears policy blockers, records external invoice issuance and actual submission, then customer acceptance and separate payment allocations.
 
-Allocation forms support nested item/stop editors. Pilot usability review is still required.
+Structured screens support receipt snapshots, evidence downloads, versioned policies, allocations, disputes, membership administration, scheduler rules, legal holds and retention requests. Pilot usability and browser accessibility review remain release gates.
 
 ### Android
 
@@ -77,10 +77,12 @@ Tests include genuine PostgreSQL SQL/RLS execution using PGlite plus transaction
 
 ## Production administration
 
-Use `scripts/provision-account.ts` to enroll an initial verified owner/customer administrator with an MFA secret and sponsor reference. Customer staff invitations are created by their customer administrator via `/v1/admin/invitations`; normal transporter invitations are created by the tenant owner. Invitation tokens must be securely delivered to verified contacts. Existing-account membership linking is deliberately blocked pending a controlled operator workflow. See [API contract](docs/API.md).
+Use `scripts/provision-account.ts` to enroll an initial verified owner/customer administrator with an MFA secret and sponsor reference. Customer staff invitations are created by their customer administrator via `/v1/admin/invitations`; normal transporter invitations are created by the tenant owner. Invitation tokens must be securely delivered to verified contacts. Existing-account linking authenticates the existing password/MFA and rechecks the inviter's current scope; it never replaces account credentials. Refresh tokens rotate, reuse revokes the session, and sensitive changes require a short-lived scoped reauthentication token. See [API contract](docs/API.md).
 
 ## External services and later phases
 
-No ULIP, e-way government write, GST, SAP, GPS vendor, WMS vendor, eSign, bank or robotics credential is included. No official status is fabricated. Local compliance tasks do not extend e-way bills. Telemetry does not establish goods receipt. Safety warnings need human review; no vehicle actuation or bank transfer endpoint exists. Native external connectors, optimization, AI, customs filing and digital twin are not implemented production capabilities.
+No ULIP, e-way government write, GST, SAP, GPS vendor, WMS vendor, eSign, bank or robotics credential is included. No official status is fabricated. Local compliance tasks do not extend e-way bills. Telemetry does not establish goods receipt. Safety warnings need human review; no vehicle actuation or bank transfer endpoint exists. An approval-gated HTTPS provider gateway supports permitted read/write/reconciliation contracts, but no provider-specific operation is enabled without credentials, purpose/expiry approval and sandbox evidence. Reviewed route plans and rule-based ETA are available; optimizing solvers, AI, customs filing and a validated digital twin remain separate roadmap work.
+
+Deploy using [the infrastructure guide](infra/DEPLOYMENT.md) and `compose.production.yaml`; run `node scripts/release-readiness.mjs` against the target environment and actual per-commit acceptance evidence. Missing evidence intentionally blocks release. See [validation results and open gates](docs/VALIDATION.md).
 
 Read [Architecture](docs/ARCHITECTURE.md), [Requirements](docs/REQUIREMENTS.md), [Operations](docs/OPERATIONS.md), and [API](docs/API.md). The original specification is preserved in [docs/SRS.md](docs/SRS.md).

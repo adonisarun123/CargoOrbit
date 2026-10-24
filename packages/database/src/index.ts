@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
-import type { AuditEvent, Context, DatabasePort, Entity, OutboxEvent, Transaction } from './types.js';
+import type { AuditEvent, Context, DatabasePort, Entity, EntityQuery, OutboxEvent, Transaction } from './types.js';
 export * from './types.js';
 export { MemoryDatabase } from './memory.js';
 
 const reservedKinds = new Set(['audit', 'outbox']);
+const boundedSetting=(name:string,fallback:number,min:number,max:number)=>{const value=Number(process.env[name]??fallback);if(!Number.isInteger(value)||value<min||value>max)throw new Error(`${name} must be an integer between ${min} and ${max}`);return value;};
 
 function validateContext(ctx: Context): void {
   if (!ctx.tenantId || !ctx.userId || !ctx.role) throw new Error('Authenticated tenant context is required');
@@ -22,11 +23,12 @@ function validateEntity(kind: string, entity: Entity): void {
 export class Database implements DatabasePort {
   readonly pool: Pool;
   private runtimeCheck: Promise<void> | undefined;
+  private readonly activeTransactions = new WeakSet<Transaction>();
 
   constructor(connection?: string | Pool | PoolConfig) {
     this.pool = connection instanceof Pool ? connection : new Pool(
-      typeof connection === 'string' ? { connectionString: connection, max: 15 } :
-      connection ?? { connectionString: process.env.DATABASE_URL, max: 15 },
+      typeof connection === 'string' ? { connectionString: connection, max: 15, connectionTimeoutMillis: 15000 } :
+      connection ?? { connectionString: process.env.DATABASE_URL, max: boundedSetting('DB_POOL_SIZE',15,1,100), connectionTimeoutMillis: 15000 },
     );
     this.pool.on('error', (error: Error) => {
       // Do not log connection strings, SQL parameters, payloads, or credentials.
@@ -37,7 +39,7 @@ export class Database implements DatabasePort {
   /** Reject superusers, BYPASSRLS and table owners even if a URL was misconfigured. */
   assertRuntimeRole(): Promise<void> {
     this.runtimeCheck ??= this.pool.query<{ unsafe: boolean }>(`
-      SELECT (r.rolsuper OR r.rolbypassrls OR EXISTS (
+      SELECT (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR has_schema_privilege(current_user,'public','CREATE') OR EXISTS (
         SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relname IN ('entities','audit_events','outbox_events')
           AND pg_has_role(current_user,c.relowner,'MEMBER')
@@ -59,27 +61,100 @@ export class Database implements DatabasePort {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query('SET LOCAL search_path=pg_catalog,public');
+      await client.query("SELECT set_config('statement_timeout',$1,true), set_config('lock_timeout',$2,true), set_config('idle_in_transaction_session_timeout',$3,true)",[String(boundedSetting('DB_STATEMENT_TIMEOUT_MS',30000,1000,300000)),String(boundedSetting('DB_LOCK_TIMEOUT_MS',10000,1000,60000)),'60000']);
       await client.query("SELECT set_config('app.tenant_id',$1,true), set_config('app.actor_id',$2,true)", [context.tenantId, context.userId]);
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`cargoorbit:${context.tenantId}`]);
+      await this.validateAuthorization(client,context);
       const tenant = await client.query<{ status: string }>('SELECT status FROM tenants WHERE id=$1', [context.tenantId]);
       if (!tenant.rows[0] || tenant.rows[0].status === 'closed') throw new Error('Tenant is unavailable');
       const tx = new PostgresTransaction(client, context, tenant.rows[0].status !== 'active');
-      const result = await callback(tx);
+      this.activeTransactions.add(tx);
+      let result:T;
+      try { result = await callback(tx); } finally { this.activeTransactions.delete(tx); }
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(()=>undefined);
       throw error;
     } finally {
       client.release();
     }
   }
 
+  private async validateAuthorization(client:PoolClient,ctx:Context):Promise<void> {
+    if(!ctx.membershipId&&!ctx.sessionId)return;
+    const changed=()=>Object.assign(new Error('Authorization changed; sign in again before retrying'),{status:403,code:'AUTHORIZATION_CHANGED'});
+    if(!ctx.membershipId||!ctx.sessionId)throw changed();
+    const result=await client.query(`SELECT m.role,m.organization_id,m.facility_ids,m.assigned_driver_id,
+      s.version,u.session_version FROM memberships m JOIN users u ON u.id=m.user_id
+      JOIN tenants t ON t.id=m.tenant_id JOIN auth_sessions s ON s.user_id=u.id AND s.membership_id=m.id
+      WHERE m.id=$1 AND s.id=$2 AND u.id=$3 AND m.tenant_id=$4 AND m.status='active'
+        AND u.status='active' AND t.status='active' AND s.revoked_at IS NULL AND s.expires_at>now()
+        AND s.user_session_version=u.session_version FOR SHARE OF m,u,s,t`,[ctx.membershipId,ctx.sessionId,ctx.userId,ctx.tenantId]);
+    const row=result.rows[0],facilities=(ids:unknown)=>JSON.stringify([...new Set(Array.isArray(ids)?ids:[])].sort());
+    if(!row||row.role!==ctx.role||(row.organization_id||undefined)!==ctx.organizationId||
+      (row.assigned_driver_id||undefined)!==ctx.assignedDriverId||facilities(row.facility_ids)!==facilities(ctx.facilityIds)||
+      ctx.sessionVersion!==undefined&&Number(row.version)!==ctx.sessionVersion||
+      ctx.userSessionVersion!==undefined&&Number(row.session_version)!==ctx.userSessionVersion)throw changed();
+  }
+
+  /** Verify receiver identity on the transaction connection; locks prevent concurrent contact changes. */
+  async verifyReceiver(tx:Transaction,userId:string,organizationId:string):Promise<ReceiverIdentity|undefined> {
+    if(!(tx instanceof PostgresTransaction)||!this.activeTransactions.has(tx))throw new Error('Receiver verification requires an active transaction from this database');
+    return tx.lookupReceiver(userId,organizationId);
+  }
+
+  /** Claim without scanning every historical event. Lease token fences stale workers. */
+  async claimOutbox(context:Context, leaseMs=120000):Promise<OutboxEvent|undefined> {
+    if(!Number.isInteger(leaseMs)||leaseMs<1000||leaseMs>900000)throw new Error('Invalid worker lease duration');
+    return this.outboxTransaction(context,async client=>{
+      const result=await client.query(`WITH candidate AS (
+        SELECT id FROM outbox_events WHERE tenant_id=$1 AND status IN ('pending','failed','processing') AND available_at<=now()
+        ORDER BY available_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1
+      ) UPDATE outbox_events e SET status='processing',attempts=e.attempts+1,lease_token=$2,
+        available_at=now()+($3::bigint * interval '1 millisecond')
+        FROM candidate c WHERE e.tenant_id=$1 AND e.id=c.id RETURNING e.*`,[context.tenantId,randomUUID(),leaseMs]);
+      return result.rows[0]?outboxFromRow(result.rows[0]):undefined;
+    });
+  }
+  async completeOutbox(context:Context,eventId:string,leaseToken:string):Promise<boolean> {
+    return this.outboxTransaction(context,async client=>{
+      const result=await client.query("UPDATE outbox_events SET status='completed',completed_at=now(),last_error=NULL,lease_token=NULL WHERE tenant_id=$1 AND id=$2 AND status='processing' AND lease_token=$3",[context.tenantId,eventId,leaseToken]);
+      return result.rowCount===1;
+    });
+  }
+  async failOutbox(context:Context,eventId:string,leaseToken:string,errorCode:string,maxAttempts=8):Promise<boolean> {
+    if(!Number.isInteger(maxAttempts)||maxAttempts<1||maxAttempts>100)throw new Error('Invalid retry limit');
+    return this.outboxTransaction(context,async client=>{
+      const result=await client.query(`UPDATE outbox_events SET status=CASE WHEN attempts>=$5 THEN 'dead' ELSE 'failed' END,
+        available_at=now()+(LEAST(3600000,power(2,LEAST(attempts,12))*1000)::bigint * interval '1 millisecond'),last_error=$4,lease_token=NULL
+        WHERE tenant_id=$1 AND id=$2 AND status='processing' AND lease_token=$3`,[context.tenantId,eventId,leaseToken,errorCode.slice(0,240),maxAttempts]);
+      return result.rowCount===1;
+    });
+  }
+  private async outboxTransaction<T>(context:Context,run:(client:PoolClient)=>Promise<T>):Promise<T>{
+    validateContext(context);await this.assertRuntimeRole();
+    const client=await this.pool.connect();try{await client.query('BEGIN');await client.query('SET LOCAL search_path=pg_catalog,public');await client.query("SET LOCAL statement_timeout='30s'");await client.query("SELECT set_config('app.tenant_id',$1,true)",[context.tenantId]);
+      const tenant=await client.query("SELECT id FROM tenants WHERE id=$1 AND status='active'",[context.tenantId]);if(!tenant.rowCount)throw new Error('Tenant is not active');
+      const value=await run(client);await client.query('COMMIT');return value;
+    }catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
+  }
   async close(): Promise<void> { await this.pool.end(); }
 }
 
+export interface ReceiverIdentity {email:string;verified_contact:string|null;contact_verified_at:Date|null;facility_ids:string[]}
+
 class PostgresTransaction implements Transaction {
   constructor(private readonly client: PoolClient, private readonly ctx: Context, private readonly readOnly: boolean) {}
+
+  async lookupReceiver(userId:string,organizationId:string):Promise<ReceiverIdentity|undefined> {
+    const result=await this.client.query<ReceiverIdentity>(`SELECT u.email,u.verified_contact,u.contact_verified_at,m.facility_ids
+      FROM users u JOIN memberships m ON m.user_id=u.id
+      WHERE u.id=$1 AND m.tenant_id=$2 AND m.organization_id=$3 AND m.role='receiver'
+        AND m.status='active' AND u.status='active' FOR SHARE OF u,m`,[userId,this.ctx.tenantId,organizationId]);
+    return result.rows[0];
+  }
 
   private writable(): void {
     if (this.readOnly) throw new Error('Tenant is closing; only retention and authorized export reads are available');
@@ -109,6 +184,22 @@ class PostgresTransaction implements Transaction {
     }
     const result = await this.client.query<{ data: T }>('SELECT data FROM entities WHERE tenant_id=$1 AND kind=$2 ORDER BY created_at,id', [this.ctx.tenantId, kind]);
     return result.rows.map(row => row.data);
+  }
+
+  async find<T extends Entity>(kind:string,query:EntityQuery={}):Promise<T[]> {
+    if(reservedKinds.has(kind)||!/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(kind))throw new Error('find requires a business entity kind');
+    const limit=query.limit??100,offset=query.offset??0;
+    if(!Number.isInteger(limit)||limit<1||limit>500||!Number.isInteger(offset)||offset<0||offset>100000)throw new Error('Invalid page bounds');
+    if(query.before&&!/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(query.before.field))throw new Error('Invalid filter field');
+    const result=await this.client.query<{data:T}>(`SELECT data FROM entities WHERE tenant_id=$1 AND kind=$2 AND data @> $3::jsonb
+      ${query.before?"AND (data ->> $6::text) < $7::text":''} ORDER BY created_at,id LIMIT $4 OFFSET $5`,
+      [this.ctx.tenantId,kind,JSON.stringify(query.where??{}),limit,offset,...(query.before?[query.before.field,query.before.value]:[])]);
+    return result.rows.map(r=>r.data);
+  }
+  async count(kind:string,where:Record<string,unknown>={}):Promise<number>{
+    if(reservedKinds.has(kind)||!/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(kind))throw new Error('count requires a business entity kind');
+    const result=await this.client.query<{count:string}>('SELECT count(*)::text FROM entities WHERE tenant_id=$1 AND kind=$2 AND data @> $3::jsonb',[this.ctx.tenantId,kind,JSON.stringify(where)]);
+    return Number(result.rows[0]?.count??0);
   }
 
   async put<T extends Entity>(kind: string, entity: T): Promise<void> {
@@ -161,5 +252,5 @@ function auditFromRow(row: Record<string, unknown>): AuditEvent {
 }
 
 function outboxFromRow(row: Record<string, unknown>): OutboxEvent {
-  return { id: String(row.id), tenantId: String(row.tenant_id), type: String(row.type), aggregateId: String(row.aggregate_id), payload: row.payload, status: row.status as OutboxEvent['status'], attempts: Number(row.attempts), availableAt: iso(row.available_at), createdAt: iso(row.created_at), ...(row.completed_at ? { completedAt: iso(row.completed_at) } : {}), ...(row.last_error ? { lastError: String(row.last_error) } : {}) };
+  return { id: String(row.id), tenantId: String(row.tenant_id), type: String(row.type), aggregateId: String(row.aggregate_id), payload: row.payload, status: row.status as OutboxEvent['status'], attempts: Number(row.attempts), availableAt: iso(row.available_at), createdAt: iso(row.created_at), ...(row.completed_at ? { completedAt: iso(row.completed_at) } : {}), ...(row.last_error ? { lastError: String(row.last_error) } : {}), ...(row.lease_token ? {leaseToken:String(row.lease_token)} : {}) };
 }

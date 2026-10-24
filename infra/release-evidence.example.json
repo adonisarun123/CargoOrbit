@@ -1,0 +1,16 @@
+{
+  "format": "cargoorbit-release-evidence-v1",
+  "releaseCommit": "REPLACE_WITH_FULL_COMMIT_SHA",
+  "environment": "production",
+  "checks": {
+    "customer_receipt_finance_acceptance": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "hosting_region_and_processors": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "provider_sandbox_contracts": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "android_device_offline_matrix": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "browser_accessibility_and_uat": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "independent_security_review": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "backup_objects_and_restore_drill": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "load_and_latency_targets": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""},
+    "privacy_retention_and_incident_owners": {"status": "pending", "owner": "", "reference": "", "verifiedAt": ""}
+  }
+}

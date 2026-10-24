@@ -11,6 +11,11 @@ export interface Context {
   facilityIds?: string[];
   assignedDriverId?: string;
   correlationId?: string;
+  /** Present on interactive requests; trusted jobs omit these identity snapshots. */
+  membershipId?: string;
+  sessionId?: string;
+  sessionVersion?: number;
+  userSessionVersion?: number;
 }
 
 export interface Entity {
@@ -40,9 +45,18 @@ export interface OutboxEvent extends Entity {
   createdAt: string;
   completedAt?: string;
   lastError?: string;
+  leaseToken?: string;
 }
 
+export interface EntityQuery {
+  where?: Record<string, unknown>;
+  before?: {field:string;value:string};
+  limit?: number;
+  offset?: number;
+}
 export interface Transaction {
+  find<T extends Entity>(kind:string,query?:EntityQuery):Promise<T[]>;
+  count(kind:string,where?:Record<string,unknown>):Promise<number>;
   get<T extends Entity>(kind: string, id: string): Promise<T | undefined>;
   list<T extends Entity>(kind: string): Promise<T[]>;
   put<T extends Entity>(kind: string, entity: T): Promise<void>;

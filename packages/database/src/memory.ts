@@ -1,5 +1,6 @@
+import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
-import type { Context, DatabasePort, Entity, OutboxEvent, Transaction } from './types.js';
+import type { Context, DatabasePort, Entity, EntityQuery, OutboxEvent, Transaction } from './types.js';
 
 /** Test adapter only. It intentionally is not selected by the deployed API. */
 export class MemoryDatabase implements DatabasePort {
@@ -17,12 +18,29 @@ export class MemoryDatabase implements DatabasePort {
         if (!found) { found = new Map(); snapshot.set(key, found); }
         return found;
       };
+      const matches=(value:unknown,where:unknown):boolean=>{if(where===null||typeof where!=='object')return value===where;if(Array.isArray(where))return Array.isArray(value)&&where.every(w=>value.some(v=>matches(v,w)));return !!value&&typeof value==='object'&&Object.entries(where).every(([k,v])=>matches((value as Record<string,unknown>)[k],v));};
+      const find=<E extends Entity>(kind:string,query:EntityQuery={})=>{
+        if(['audit','outbox'].includes(kind)||!/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(kind))throw new Error('find requires a business entity kind');
+        const limit=query.limit??100,offset=query.offset??0;
+        if(!Number.isInteger(limit)||limit<1||limit>500||!Number.isInteger(offset)||offset<0||offset>100000)throw new Error('Invalid page bounds');
+        if(query.before&&!/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(query.before.field))throw new Error('Invalid filter field');
+        return structuredClone([...table(kind).values()].filter(v=>matches(v,query.where??{})&&(!query.before||typeof v[query.before.field]==='string'&&String(v[query.before.field])<query.before.value)).slice(offset,offset+limit)) as E[];
+      };
       const tx: Transaction = {
+        find:async <E extends Entity>(kind:string,query:EntityQuery={})=>find<E>(kind,query),
+        count:async(kind:string,where:Record<string,unknown>={})=>{if(['audit','outbox'].includes(kind)||!/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(kind))throw new Error('count requires a business entity kind');return [...table(kind).values()].filter(v=>matches(v,where)).length;},
         get: async <E extends Entity>(kind: string, id: string) => structuredClone(table(kind).get(id)) as E | undefined,
         list: async <E extends Entity>(kind: string) => structuredClone([...table(kind).values()]) as E[],
         put: async <E extends Entity>(kind: string, entity: E) => {
           if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(kind) || !entity.id || typeof entity.id !== 'string') throw new Error('Entity kind and id are required');
           if ('tenantId' in entity && entity.tenantId !== context.tenantId) throw new Error('Cross tenant payload is prohibited');
+          if (table(kind).has(entity.id)&&['policies','observations','inventory_movements','asset_handovers','safety_tests','scorecards','emissions_runs','dock_reads','handling_unit_events','eta_estimates','maintenance_events','allocation_reversals','allocation_verifications','discrepancies'].includes(kind))throw new Error('Historical record is append only; append a correction');
+          if(kind==='evidence'&&table(kind).has(entity.id)){
+            const old=table(kind).get(entity.id)!;const omitScan=(v:Entity)=>Object.fromEntries(Object.entries(v).filter(([k])=>!['scanStatus','scannerReference','scannedAt'].includes(k)));
+            if(!isDeepStrictEqual(omitScan(old),omitScan(entity)))throw new Error('Original evidence provenance is immutable');
+            const bound=[...table('pods').values()].some(p=>{const payload=p.acceptedPayload as {evidence?:{id:string}[]}|undefined;return payload?.evidence?.some(e=>e.id===entity.id);});
+            if(bound&&!isDeepStrictEqual(old,entity))throw new Error('Sealed evidence provenance is immutable');
+          }
           if (kind === 'pods' && table(kind).get(entity.id)?.acceptedPayload != null) throw new Error('Finalized POD versions are immutable; create a linked correction');
           if (kind === 'audit') throw new Error('Audit events are append only');
           if (kind === 'outbox') {
@@ -37,6 +55,8 @@ export class MemoryDatabase implements DatabasePort {
         },
         delete: async (kind: string, id: string) => {
           if (['audit', 'outbox'].includes(kind)) throw new Error('Append only record');
+          if (['policies','observations','inventory_movements','asset_handovers','safety_tests','scorecards','emissions_runs','dock_reads','handling_unit_events','eta_estimates','maintenance_events','allocation_reversals','allocation_verifications','discrepancies'].includes(kind))throw new Error('Historical record is append only');
+          if(kind==='evidence'&&[...table('pods').values()].some(p=>(p.acceptedPayload as {evidence?:{id:string}[]}|undefined)?.evidence?.some(e=>e.id===id)))throw new Error('Sealed evidence provenance is immutable');
           if (kind === 'pods' && table(kind).get(id)?.acceptedPayload != null) throw new Error('Finalized POD versions are immutable; create a linked correction');
           table(kind).delete(id);
         },
