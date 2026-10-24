@@ -6,3 +6,5 @@
 .weekday-options{display:flex;flex-wrap:wrap;gap:6px 20px}.weekday-options .check-row{min-width:105px}.operations form .panel-heading{padding:0}
 .main-shell,main,.panel{min-width:0}.table-scroll{max-width:100%}
 .scope-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;max-height:280px;overflow:auto;padding:8px}.public-tracking{max-width:1000px;margin:0 auto;padding:40px 20px;display:flex;flex-direction:column;gap:28px}
+/* Keep every navigation action reachable on short desktop and mobile viewports. */
+.sidebar{overflow:hidden}.sidebar>nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:3px}.sidebar-logo,.workspace-selector,.sidebar-bottom{flex-shrink:0}
