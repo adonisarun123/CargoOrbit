@@ -1,0 +1,23 @@
+import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
+import {PGlite} from '@electric-sql/pglite';
+import {Database,type Context} from '@cargoorbit/database';
+import {applyFixtureMigrations} from './database-fixture';
+let pg:PGlite,db:Database;
+const ctx:Context={tenantId:'closing',userId:'owner',role:'owner',facilityIds:[],membershipId:'membership',exitSessionId:'exit-session',exitExportReceiptId:'archive',sessionVersion:1,userSessionVersion:1};
+beforeAll(async()=>{pg=new PGlite();await applyFixtureMigrations(pg);db=new Database();const query=async(sql:string,args?:unknown[])=>{const result=await pg.query(sql,args);return {...result,rowCount:result.affectedRows||result.rows.length}};(db.pool as any).query=query;(db.pool as any).connect=async()=>({query,release(){}});});
+beforeEach(async()=>{await pg.exec(`RESET ROLE;TRUNCATE tenants,users CASCADE;
+ INSERT INTO tenants(id,name,status,features) VALUES('closing','Closing','closing',jsonb_build_object('exitExportUntil',(now()+interval '1 day')::text,'exitExportReceiptId','archive'));
+ INSERT INTO users(id,email,password_hash,name,mfa_enabled) VALUES('owner','owner@example.test','unused','Owner',true);
+ INSERT INTO memberships(id,user_id,tenant_id,role) VALUES('membership','owner','closing','owner');
+ INSERT INTO exit_sessions(id,user_id,membership_id,user_session_version,expires_at) VALUES('exit-session','owner','membership',1,now()+interval '15 minutes');
+ INSERT INTO auth_sessions(id,user_id,membership_id,refresh_hash,user_session_version,expires_at) VALUES('normal-session','owner','membership','unused',1,now()+interval '15 minutes');
+ INSERT INTO entities(tenant_id,kind,id,data) VALUES('closing','tenant_exports','archive','{"id":"archive","status":"completed"}');
+ SET ROLE cargoorbit_app;`);});
+afterAll(async()=>{await db.close();await pg.close()});
+describe('read-only owner exit database authorization',()=>{
+ it('dispatches exit context to a separate session and allows attributed archive reads/audit',async()=>{const archive=await db.transaction(ctx,async tx=>{await tx.audit('exit.archive.download','archive');return tx.get('tenant_exports','archive')});expect(archive?.status).toBe('completed');});
+ it('denies business writes, deletion and work emission while permitting reads',async()=>{await expect(db.transaction(ctx,tx=>tx.put('orders',{id:'order'}))).rejects.toThrow(/reads/);await expect(db.transaction(ctx,tx=>tx.delete('tenant_exports','archive'))).rejects.toThrow(/reads/);await expect(db.transaction(ctx,tx=>tx.emit('export.requested','archive',{}))).rejects.toThrow(/reads/);});
+ it('does not make ordinary sessions or mixed token identities valid after closure',async()=>{const normal={...ctx,exitSessionId:undefined,exitExportReceiptId:undefined,sessionId:'normal-session'};await expect(db.transaction(normal,tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'AUTHORIZATION_CHANGED'});await expect(db.transaction({...ctx,sessionId:'normal-session'},tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_IDENTITY_REQUIRED'});await expect(db.transaction({...ctx,role:'operations'},tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_IDENTITY_REQUIRED'});});
+ it('rechecks receipt/window and user/session/MFA revocations at every transaction',async()=>{await expect(db.transaction({...ctx,exitExportReceiptId:'other'},tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_AUTHORIZATION_CHANGED'});await expect(db.transaction({...ctx,sessionVersion:2},tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_AUTHORIZATION_CHANGED'});await pg.exec("UPDATE users SET mfa_enabled=false WHERE id='owner'");await expect(db.transaction(ctx,tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_AUTHORIZATION_CHANGED'});await pg.exec("UPDATE users SET mfa_enabled=true;UPDATE exit_sessions SET revoked_at=now()");await expect(db.transaction(ctx,tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_AUTHORIZATION_CHANGED'});await pg.exec("UPDATE exit_sessions SET revoked_at=null;UPDATE tenants SET features=jsonb_set(features,'{exitExportUntil}',to_jsonb((now()-interval '1 minute')::text))");await expect(db.transaction(ctx,tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_AUTHORIZATION_CHANGED'});});
+ it('refuses exit access before closing and after final closure',async()=>{for(const status of ['active','closed']){await pg.query('UPDATE tenants SET status=$1',[status]);await expect(db.transaction(ctx,tx=>tx.list('tenant_exports'))).rejects.toMatchObject({code:'EXIT_AUTHORIZATION_CHANGED'});}});
+});

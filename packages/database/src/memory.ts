@@ -36,6 +36,7 @@ export class MemoryDatabase implements DatabasePort {
         get: async <E extends Entity>(kind: string, id: string) => structuredClone(table(kind).get(id)) as E | undefined,
         list: async <E extends Entity>(kind: string) => structuredClone([...table(kind).values()]) as E[],
         put: async <E extends Entity>(kind: string, entity: E) => {
+          if(context.exitSessionId)throw new Error('Exit access permits reads and audit only');
           if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(kind) || !entity.id || typeof entity.id !== 'string') throw new Error('Entity kind and id are required');
           if ('tenantId' in entity && entity.tenantId !== context.tenantId) throw new Error('Cross tenant payload is prohibited');
           if (table(kind).has(entity.id)&&['policies','observations','inventory_movements','asset_handovers','safety_tests','scorecards','emissions_runs','dock_reads','handling_unit_events','eta_estimates','maintenance_events','allocation_reversals','allocation_verifications','discrepancies','operational_rules','fuel_entries','toll_events','warehouse_task_events','quality_reviews','replenishment_events','recovery_verifications','advanced_approval_history','maintenance_signals','maintenance_rules','layout_versions','goods_documents','goods_document_links','transshipments','barcode_mappings','task_history','usage_warnings'].includes(kind))throw new Error('Historical record is append only; append a correction');
@@ -58,6 +59,7 @@ export class MemoryDatabase implements DatabasePort {
           table(kind).set(entity.id, structuredClone(entity));
         },
         delete: async (kind: string, id: string) => {
+          if(context.exitSessionId)throw new Error('Exit access permits reads and audit only');
           if (['audit', 'outbox'].includes(kind)) throw new Error('Append only record');
           if (['policies','observations','inventory_movements','asset_handovers','safety_tests','scorecards','emissions_runs','dock_reads','handling_unit_events','eta_estimates','maintenance_events','allocation_reversals','allocation_verifications','discrepancies','operational_rules','fuel_entries','toll_events','warehouse_task_events','quality_reviews','replenishment_events','recovery_verifications','advanced_approval_history','maintenance_signals','maintenance_rules','layout_versions','goods_documents','goods_document_links','transshipments','barcode_mappings','task_history','usage_warnings'].includes(kind))throw new Error('Historical record is append only');
           if(kind==='evidence'&&[...table('pods').values()].some(p=>(p.acceptedPayload as {evidence?:{id:string}[]}|undefined)?.evidence?.some(e=>e.id===id)))throw new Error('Sealed evidence provenance is immutable');
@@ -69,6 +71,7 @@ export class MemoryDatabase implements DatabasePort {
           table('audit').set(id, { id, tenantId: context.tenantId, actorId: context.userId, role: context.role, action, target, details: structuredClone(details), correlationId: context.correlationId ?? randomUUID(), createdAt: new Date().toISOString() });
         },
         emit: async (type: string, aggregateId: string, payload: unknown) => {
+          if(context.exitSessionId)throw new Error('Exit access permits reads and audit only');
           const id = randomUUID(); const now = new Date().toISOString();
           const event: OutboxEvent = { id, tenantId: context.tenantId, type, aggregateId, payload: structuredClone(payload), status: 'pending', attempts: 0, createdAt: now, availableAt: now };
           table('outbox').set(id, event);

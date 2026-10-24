@@ -1,0 +1,27 @@
+{
+  "source": {
+    "commit": "be60ceaa6e3282f2ff522f514da02ffa7ac25742",
+    "workflowRun": "https://github.com/adonisarun123/CargoOrbit/actions/runs/40115994476",
+    "jobId": 120937267925,
+    "artifactId": 12567994878,
+    "stepStatus": "passed",
+    "workflowStatus": "failed in later browser startup; port collision"
+  },
+  "result": {
+    "format": "cargoorbit-recovery-rehearsal-v1",
+    "scope": "synthetic local PostgreSQL17 and file-object fixture; not production S3/PITR or RPO evidence",
+    "status": "passed",
+    "startedAt": "2026-10-24T17:26:11.288Z",
+    "finishedAt": "2026-10-24T17:26:12.495Z",
+    "backupSeconds": 0.481,
+    "restoreSeconds": 0.344,
+    "totalSeconds": 1.207,
+    "databaseCountsAndReferencesVerified": true,
+    "objectVersions": 1,
+    "objectBytes": 52,
+    "restoredObjectChecksumVerified": true,
+    "restrictedRuntimeApplicationReadReplayed": true,
+    "applicationAcceptanceReplayed": false,
+    "cloudBackupDisposalOrPitrVerified": false
+  }
+}

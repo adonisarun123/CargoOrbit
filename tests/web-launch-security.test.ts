@@ -2,6 +2,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {receiptVerificationMatches} from '../apps/web/lib/verification';
 import {safeReturnTo,readOidcFlow,oidcKey,browserBinding} from '../apps/web/lib/oidc';
 import {archiveDestination,downloadArchive} from '../apps/web/lib/api';
+import {EXIT_KEY,readExitSession,exitRequest} from '../apps/web/lib/exit';
 import {suggestImportMapping} from '../apps/web/lib/import-mapping';
 const hash='a'.repeat(64);
 afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks()});
@@ -22,3 +23,9 @@ describe('bounded archive download',()=>{
  it('rejects a changed checksum or oversized fallback before buffering the body',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(file(3)).mockResolvedValueOnce(file(128*1024*1024+1)));await expect(downloadArchive('token','/archive','a.gz',{},null,'b'.repeat(64))).rejects.toThrow('checksum header');await expect(downloadArchive('token','/archive','a.gz',{},null,hash)).rejects.toThrow('128 MiB')});
 });
 describe('CSV mapping',()=>{it('maps known human headings without treating arbitrary metadata as an import field',()=>{expect(suggestImportMapping('consignments',['LR Number','Description','Quantity','Unit','adminRole','Status'])).toEqual({lrNumber:'LR Number','line.description':'Description','line.quantity':'Quantity','line.unit':'Unit'});expect(suggestImportMapping('invoices',['Invoice Number','Number','Amount','Tax Data Supplier Gstin','Description'])).toEqual({number:'Number',amount:'Amount','taxData.supplierGstin':'Tax Data Supplier Gstin'})})});
+
+describe('isolated closing workspace export session',()=>{
+ it('does not treat normal credentials as exit credentials and expires exit tokens locally',()=>{const store=new Map<string,string>([['cargoorbit.session',JSON.stringify({accessToken:'normal-token'})]]);vi.stubGlobal('sessionStorage',{getItem:(key:string)=>store.get(key)||null,removeItem:(key:string)=>store.delete(key)});expect(readExitSession()).toBeNull();store.set(EXIT_KEY,JSON.stringify({exitToken:'exit-only',user:{role:'owner'},expiresAt:new Date(Date.now()+60000).toISOString()}));expect(readExitSession()?.exitToken).toBe('exit-only');store.set(EXIT_KEY,JSON.stringify({exitToken:'exit-only',user:{role:'owner'},expiresAt:'2020-01-01T00:00:00Z'}));expect(readExitSession()).toBeNull();expect(store.has(EXIT_KEY)).toBe(false);expect(store.has('cargoorbit.session')).toBe(true)});
+ it('sends only exit bearer and never refreshes a failed exit token',async()=>{const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({message:'Export window closed',code:'EXIT_WINDOW_EXPIRED'}),{status:401}));vi.stubGlobal('fetch',fetch);await expect(exitRequest('/exit/exports',{exitToken:'exit-only'} as any)).rejects.toMatchObject({status:401,code:'EXIT_WINDOW_EXPIRED'});expect(fetch).toHaveBeenCalledTimes(1);expect(new Headers(fetch.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer exit-only')});
+ it('rejects normal app routes before making any request',async()=>{const fetch=vi.fn();vi.stubGlobal('fetch',fetch);await expect(exitRequest('/auth/refresh',{exitToken:'exit-only'} as any,{})).rejects.toThrow('only exit export');await expect(exitRequest('/actions/createInvoice',{exitToken:'exit-only'} as any,{})).rejects.toThrow('only exit export');expect(fetch).not.toHaveBeenCalled()});
+});

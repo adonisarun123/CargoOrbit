@@ -57,23 +57,30 @@ export class Database implements DatabasePort {
   }
 
   async transaction<T>(context: Context, callback: (tx: Transaction) => Promise<T>): Promise<T> {
+    if(context.exitSessionId)return this.exitTransaction(context,callback);
     return this.transactionWithAuthorization(context,context,callback,false);
+  }
+
+  /** Closing-workspace handover only; independent MFA-backed owner session and no business writes. */
+  async exitTransaction<T>(context:Context,callback:(tx:Transaction)=>Promise<T>):Promise<T> {
+    if(context.role!=='owner'||!context.membershipId||!context.exitSessionId||!context.exitExportReceiptId||context.sessionId||!Number.isInteger(context.sessionVersion)||!Number.isInteger(context.userSessionVersion))throw Object.assign(new Error('Owner exit identity required'),{status:403,code:'EXIT_IDENTITY_REQUIRED'});
+    return this.transactionWithAuthorization(context,context,callback,true,true);
   }
 
   /** Approved support tooling only. Keeps the real home-workspace identity; business writes are denied. */
   async supportTransaction<T>(source:Context,targetTenantId:string,callback:(tx:Transaction)=>Promise<T>):Promise<T> {
-    if(source.role!=='platform_admin'||!source.membershipId||!source.sessionId||!Number.isInteger(source.sessionVersion)||!Number.isInteger(source.userSessionVersion))throw Object.assign(new Error('Authenticated platform support identity required'),{status:403,code:'SUPPORT_IDENTITY_REQUIRED'});
+    if(source.exitSessionId||source.role!=='platform_admin'||!source.membershipId||!source.sessionId||!Number.isInteger(source.sessionVersion)||!Number.isInteger(source.userSessionVersion))throw Object.assign(new Error('Authenticated platform support identity required'),{status:403,code:'SUPPORT_IDENTITY_REQUIRED'});
     if(!targetTenantId||targetTenantId.length>200)throw new Error('Invalid support target');
     return this.transactionWithAuthorization({...source,tenantId:targetTenantId},source,callback,true);
   }
 
   /** Public capabilities are independently verified by the callback and cannot change business records. */
   async capabilityTransaction<T>(context:Context,callback:(tx:Transaction)=>Promise<T>):Promise<T> {
-    if(context.role!=='auditor'||! /^(tracking|machine):[^:]+$/.test(context.userId)||context.membershipId||context.sessionId||context.sessionVersion!==undefined||context.userSessionVersion!==undefined)throw Object.assign(new Error('Read-only capability context required'),{status:403,code:'CAPABILITY_IDENTITY_REQUIRED'});
+    if(context.exitSessionId||context.role!=='auditor'||! /^(tracking|machine):[^:]+$/.test(context.userId)||context.membershipId||context.sessionId||context.sessionVersion!==undefined||context.userSessionVersion!==undefined)throw Object.assign(new Error('Read-only capability context required'),{status:403,code:'CAPABILITY_IDENTITY_REQUIRED'});
     return this.transactionWithAuthorization(context,context,callback,true);
   }
 
-  private async transactionWithAuthorization<T>(context:Context,authorization:Context,callback:(tx:Transaction)=>Promise<T>,supportReadOnly:boolean):Promise<T> {
+  private async transactionWithAuthorization<T>(context:Context,authorization:Context,callback:(tx:Transaction)=>Promise<T>,supportReadOnly:boolean,exitMode=false):Promise<T> {
     validateContext(context);
     await this.assertRuntimeRole();
     const client = await this.pool.connect();
@@ -83,9 +90,9 @@ export class Database implements DatabasePort {
       await client.query("SELECT set_config('statement_timeout',$1,true), set_config('lock_timeout',$2,true), set_config('idle_in_transaction_session_timeout',$3,true)",[String(boundedSetting('DB_STATEMENT_TIMEOUT_MS',30000,1000,300000)),String(boundedSetting('DB_LOCK_TIMEOUT_MS',10000,1000,60000)),'60000']);
       await client.query("SELECT set_config('app.tenant_id',$1,true), set_config('app.actor_id',$2,true)", [context.tenantId, context.userId]);
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`cargoorbit:${context.tenantId}`]);
-      await this.validateAuthorization(client,authorization,supportReadOnly);
+      if(exitMode)await this.validateExitAuthorization(client,authorization);else await this.validateAuthorization(client,authorization,supportReadOnly);
       const tenant = await client.query<{ status: string }>('SELECT status FROM tenants WHERE id=$1', [context.tenantId]);
-      if (!tenant.rows[0] || tenant.rows[0].status === 'closed'||supportReadOnly&&tenant.rows[0].status!=='active') throw new Error('Tenant is unavailable');
+      if (!tenant.rows[0] || tenant.rows[0].status === 'closed'||exitMode&&tenant.rows[0].status!=='closing'||supportReadOnly&&!exitMode&&tenant.rows[0].status!=='active') throw new Error('Tenant is unavailable');
       const tx = new PostgresTransaction(client, context, supportReadOnly||tenant.rows[0].status !== 'active');
       this.activeTransactions.add(tx);
       let result:T;
@@ -98,6 +105,20 @@ export class Database implements DatabasePort {
     } finally {
       client.release();
     }
+  }
+
+  private async validateExitAuthorization(client:PoolClient,ctx:Context):Promise<void> {
+    const denied=()=>Object.assign(new Error('Exit access is unavailable or expired'),{status:403,code:'EXIT_AUTHORIZATION_CHANGED'});
+    const result=await client.query(`SELECT m.organization_id,m.facility_ids,m.assigned_driver_id,s.version,u.session_version,t.features->>'exitExportUntil' exit_export_until,t.features->>'exitExportReceiptId' exit_export_receipt_id
+      FROM memberships m JOIN users u ON u.id=m.user_id JOIN tenants t ON t.id=m.tenant_id
+      JOIN exit_sessions s ON s.user_id=u.id AND s.membership_id=m.id
+      WHERE m.id=$1 AND s.id=$2 AND u.id=$3 AND m.tenant_id=$4 AND m.role='owner'
+        AND m.status='active' AND u.status='active' AND u.mfa_enabled=true AND t.status='closing'
+        AND s.revoked_at IS NULL AND s.expires_at>now() AND s.user_session_version=u.session_version
+      FOR SHARE OF m,u,s,t`,[ctx.membershipId,ctx.exitSessionId,ctx.userId,ctx.tenantId]);
+    const row=result.rows[0],facilities=(ids:unknown)=>JSON.stringify([...new Set(Array.isArray(ids)?ids:[])].sort());
+    if(!row||row.exit_export_receipt_id!==ctx.exitExportReceiptId||!Number.isFinite(Date.parse(row.exit_export_until))||Date.parse(row.exit_export_until)<=Date.now()||Number(row.version)!==ctx.sessionVersion||Number(row.session_version)!==ctx.userSessionVersion||
+      (row.organization_id||undefined)!==ctx.organizationId||(row.assigned_driver_id||undefined)!==ctx.assignedDriverId||facilities(row.facility_ids)!==facilities(ctx.facilityIds))throw denied();
   }
 
   private async validateAuthorization(client:PoolClient,ctx:Context,requireMfa=false):Promise<void> {

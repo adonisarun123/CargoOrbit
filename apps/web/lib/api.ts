@@ -37,7 +37,10 @@ export async function archiveDestination(filename:string):Promise<FileSystemFile
  return picker({suggestedName:filename,types:[{description:'Workspace archive',accept:{'application/gzip':['.gz']}}]});
 }
 export async function downloadArchive(token:string,path:string,filename:string,headers:Record<string,string>,destination:FileSystemFileHandle|null,expectedHash?:string){
- const response=await authorizedFetch(path,token,{headers});if(!response.ok){const err=await response.json().catch(()=>({}));throw new ApiError(response.status,err.message||'This archive is not available.')}
+ const response=await authorizedFetch(path,token,{headers});return saveArchiveResponse(response,filename,destination,expectedHash);
+}
+export async function saveArchiveResponse(response:Response,filename:string,destination:FileSystemFileHandle|null,expectedHash?:string){
+ if(!response.ok){const err=await response.json().catch(()=>({}));throw new ApiError(response.status,err.message||'This archive is not available.')}
  if(expectedHash&&response.headers.get('X-Archive-SHA256')!==expectedHash){await response.body?.cancel();throw new Error('The archive checksum header differs from the reviewed export. Refresh and investigate before downloading.')}
  if(!response.body)throw new Error('The archive stream is unavailable.');
  const length=response.headers.get('X-Archive-Bytes');

@@ -29,11 +29,15 @@ export function retentionPlan(snapshot,manifest,trust,now=Date.now()){
  check(manifest?.inventorySha256===inventorySha256,'INVENTORY_RECEIPT_MISMATCH');
  const e=snapshot.exports.find(value=>value.id===manifest?.exportReceipt?.exportId),receipt=manifest?.exportReceipt;
  check(e?.status==='completed'&&hash(e.sha256)&&e.sha256===receipt?.sha256&&reference(e.receiptReference)&&e.receiptReference===receipt?.receiptReference&&e.acknowledgedBy===receipt?.acknowledgedBy&&e.acknowledgedAt===receipt?.acknowledgedAt&&validDate(e.acknowledgedAt,now),'ACKNOWLEDGED_EXPORT_RECEIPT_REQUIRED');
- if(r.action==='close')check(snapshot.tenant?.status==='active','TENANT_NOT_ACTIVE');
+ if(r.action==='close'){
+  check(snapshot.tenant?.status==='active','TENANT_NOT_ACTIVE');
+  const until=Date.parse(manifest?.exportWindowEndsAt);check(Number.isFinite(until)&&until>now&&until<=now+90*24*60*60*1000,'FUTURE_BOUNDED_EXPORT_WINDOW_REQUIRED');
+ }
+
  if(r.action==='delete'){
   check(snapshot.tenant?.status==='closing','TENANT_MUST_BE_CLOSING');
   check(snapshot.activeHolds.length===0,'ACTIVE_LEGAL_HOLD');
-  check(validDate(manifest?.exportWindowEndsAt,now),'EXPORT_WINDOW_NOT_EXPIRED');
+  check(validDate(manifest?.exportWindowEndsAt,now)&&snapshot.tenant?.features?.exitExportUntil===manifest?.exportWindowEndsAt,'EXPORT_WINDOW_NOT_EXPIRED');
   check(reference(manifest?.objectDisposition?.reference)&&manifest.objectDisposition.status==='disposed'&&manifest.objectDisposition.inventorySha256===inventorySha256&&validDate(manifest.objectDisposition.verifiedAt,now),'OBJECT_DISPOSITION_NOT_RECONCILED');
   check(reference(manifest?.backupInventory?.reference)&&hash(manifest?.backupInventory?.sha256)&&manifest.backupInventory.complete===true,'BACKUP_INVENTORY_NOT_COMPLETE');
   check(Array.isArray(manifest?.backups)&&manifest.backups.length>0&&manifest.backups.length<=10000&&manifest.backups.every(b=>reference(b.id)&&['disposed','expired'].includes(b.status)&&reference(b.reference)&&validDate(b.verifiedAt,now)),'BACKUP_DISPOSITIONS_NOT_COMPLETE');

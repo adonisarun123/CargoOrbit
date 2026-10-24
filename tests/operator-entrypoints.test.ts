@@ -12,6 +12,7 @@ describe('operator command entrypoints',()=>{
   ['provision-runtime.ts','Set MIGRATION_DATABASE_URL and a RUNTIME_DATABASE_PASSWORD'],
   ['provision-account.ts','Set ACCOUNT_EMAIL, ACCOUNT_NAME, ACCOUNT_PASSWORD'],
   ['seed.ts','Set SEED_PASSWORD to at least 12 characters'],
+  ['configure-contract-usage.ts','Set MIGRATION_DATABASE_URL, CONTRACT_TENANT_ID'],
  ])('%s reaches configuration validation without credentials', (file,expected)=>{
   const cwd=mkdtempSync(join(tmpdir(),'cargoorbit-operator-smoke-'));
   try{

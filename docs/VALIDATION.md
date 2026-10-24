@@ -5,7 +5,7 @@ This record distinguishes executed engineering checks from production acceptance
 ## Executed locally
 
 - TypeScript checks across database, domain, API, web and Android source passed after the final contract-limit integration.
-- The final integrated local suite passed 294 tests, with six hosted PostgreSQL tests skipped locally. PostgreSQL SQL/RLS/immutability checks execute through PGlite; hosted multi-connection tests run in CI.
+- The final integrated local suite passed 331 tests, with six hosted PostgreSQL tests skipped locally. PostgreSQL SQL/RLS/immutability checks execute through PGlite; hosted multi-connection tests run in CI.
 - Optimized Next.js build passed with the workspace, tracking link, OIDC callback and authenticated receipt-verification routes. Focused browser-side tests cover session isolation, CSV mappings, callback return/binding guards, receipt hashes and bounded/streaming archive downloads.
 - Twenty-one operational/export regressions passed, including cursor scope, stale task updates, role-matched assignment, current-user inbox, concurrent archive attempt fencing, aborts while waiting on database/storage, immutable-object hash failures and real Node stream cancellation.
 - Scoped API/web production dependency audit returned zero vulnerabilities. The hash-locked node-forge candidate mitigation reproduced and rejected the known malformed-signature vector and passed 13 normal interoperability/compatibility probes. An independent implementation review repeated those probes and tamper refusal. This does not erase the upstream advisory or constitute independent security certification.
@@ -18,7 +18,7 @@ This record distinguishes executed engineering checks from production acceptance
 
 CI runs migration/checksum repeatability, real PostgreSQL tenant/session/outbox tests, full source/test/build checks, four browser scenarios against real API/worker/PostgreSQL, a disposable database/object recovery rehearsal, scoped server audits and a non-root server-container HTTP smoke test. A separate Android workflow compiles unsigned preview/diagnostic APKs and exercises SQLCipher/restart diagnostics on an emulator.
 
-Inspect the Actions runs for the exact pushed commit; a workflow definition alone is not a passing result. Raw full-workspace advisory audit remains a distinct hard-failing gate while the unresolved node-forge advisory applies. The mitigation proof and raw audit are retained together. CI unsigned diagnostics do not establish signed fleet-device acceptance.
+The first pushed candidate (`be60ceaa6e3282f2ff522f514da02ffa7ac25742`) passed 300 unit/integration tests, production build and synthetic recovery in CI. Browser startup then failed on a test-server port collision, and the Android job failed on a retired SDK package; both configurations were corrected. Those results do not prove the corrected browser/native run. Inspect the Actions runs for the exact pushed commit; a workflow definition alone is not a passing result. Raw full-workspace advisory audit remains a distinct hard-failing gate while the unresolved node-forge advisory applies. The mitigation proof and raw audit are retained together. CI unsigned diagnostics do not establish signed fleet-device acceptance.
 
 ## Live acceptance still required
 

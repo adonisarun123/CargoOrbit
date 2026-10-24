@@ -9,6 +9,7 @@ import {ZodError} from 'zod';
 import type {Request,Response,NextFunction} from 'express';
 import {AuthController,WorkflowController,HealthController} from './controller.js';
 import {OidcController} from './oidc.js';
+import {ExitController,ExitLoginController} from './exit.js';
 import {AccessController,SupportController,PublicAccessController} from './access.js';
 import {ContactController} from './contact.js';
 import {AdminController,InvitationController} from './admin.js';
@@ -20,7 +21,7 @@ import {verifyStorage} from './storage.js';
 export class Errors implements ExceptionFilter{
  catch(error:any,host:ArgumentsHost){const http=host.switchToHttp(),response=http.getResponse<Response>(),req=http.getRequest<Request>();let status=error instanceof HttpException?error.getStatus():error instanceof ZodError?400:Number(error.status)||500;if(status<400||status>599)status=500;const details=error instanceof ZodError?error.issues.map(issue=>({path:issue.path.join('.'),message:issue.message})):error instanceof HttpException?error.getResponse():undefined;const structured=typeof details==='object'&&details!==null&&!Array.isArray(details)?details as Record<string,unknown>:undefined;const message=status>=500?'Service temporarily unavailable':error instanceof ZodError?'Request validation failed':typeof structured?.message==='string'?structured.message:error.message||'Request failed';const code=status>=500?'SERVICE_UNAVAILABLE':typeof structured?.code==='string'?structured.code:typeof error.code==='string'&&/^[A-Z_]+$/.test(error.code)?error.code:'REQUEST_ERROR';if(status>=500)console.error(JSON.stringify({level:'error',requestId:req.headers['x-request-id'],error:error.constructor?.name||'Error'}));response.status(status).json({statusCode:status,code,message,...(status<500?{details}:{}),requestId:req.headers['x-request-id']});}
 }
-@Module({controllers:[AuthController,WorkflowController,HealthController,AdminController,InvitationController,ContactController,OidcController,AccessController,SupportController,PublicAccessController,OperationsController,PublicNotificationController]})
+@Module({controllers:[AuthController,WorkflowController,HealthController,AdminController,InvitationController,ContactController,OidcController,ExitController,ExitLoginController,AccessController,SupportController,PublicAccessController,OperationsController,PublicNotificationController]})
 export class ApplicationModule{}
 export async function bootstrap(){
  await database.assertRuntimeRole();await verifyStorage();

@@ -14,6 +14,9 @@ export interface Context {
   /** Present on interactive requests; trusted jobs omit these identity snapshots. */
   membershipId?: string;
   sessionId?: string;
+  /** Separate owner exit session; never issued for normal business requests. */
+  exitSessionId?: string;
+  exitExportReceiptId?: string;
   sessionVersion?: number;
   userSessionVersion?: number;
 }

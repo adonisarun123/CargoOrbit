@@ -58,7 +58,7 @@ The harness refuses any APK with another package ID. It signs only this isolated
 
 ## Persistence and recovery controls
 
-- One SQLCipher file and random SecureStore/Android KeyStore-backed key per tenant and named user.
+- One SQLCipher file and random SecureStore/Android KeyStore-backed key per tenant and named user. All queue reads and writes are serialized on a private keyed connection; transactions do not use Expo’s exclusive helper, which opens a separate unkeyed connection.
 - Android backup disabled; supported device storage remains an operational dependency.
 - At least 100 metadata items and 300 MB media capacity are enforced as quotas; capture checks free disk space and warns at 80%. This is not a device certification of those capacities.
 - Photo hashes are checked when decrypting and against the server acknowledgement. Stable upload/event IDs survive crash/restart.

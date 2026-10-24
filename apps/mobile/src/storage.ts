@@ -20,14 +20,18 @@ export class EncryptedQueue {
  private closing=false;
  private closed:Promise<void>|null=null;
  private inflight=new Set<Promise<unknown>>();
+ private tail:Promise<unknown>=Promise.resolve();
  private constructor(private db:SQLite.SQLiteDatabase,readonly owner:string){}
- private run<T>(fn:()=>Promise<T>):Promise<T>{if(this.closing)return Promise.reject(new Error('This account storage is closing. Reopen the account before capture.'));const work=fn();this.inflight.add(work);void work.finally(()=>this.inflight.delete(work)).catch(()=>undefined);return work;}
+ private run<T>(fn:()=>Promise<T>):Promise<T>{if(this.closing)return Promise.reject(new Error('This account storage is closing. Reopen the account before capture.'));const work=this.tail.then(fn);this.tail=work.catch(()=>undefined);this.inflight.add(work);void work.finally(()=>this.inflight.delete(work)).catch(()=>undefined);return work;}
+ /** Expo's exclusive transaction helper opens an unkeyed connection. All queue access is
+  * serialized above, so transactions stay on this private SQLCipher-keyed connection. */
+ private async transaction(task:(tx:SQLite.SQLiteDatabase)=>Promise<void>):Promise<void>{await this.db.execAsync('BEGIN IMMEDIATE');try{await task(this.db);await this.db.execAsync('COMMIT');}catch(error){await this.db.execAsync('ROLLBACK').catch(()=>undefined);throw error;}}
  static async open(session:Session):Promise<EncryptedQueue>{
  const owner=`${session.user.tenantId}:${session.user.id}`;
  const namespace=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,owner),keyName=`cargoorbit_cipher_${namespace}`;
  let key=await SecureStore.getItemAsync(keyName);if(!key){key=hex(await Crypto.getRandomBytesAsync(32));await SecureStore.setItemAsync(keyName,key,{keychainAccessible:SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY});}
  if(!/^[a-f0-9]{64}$/.test(key))throw new Error('Device encryption key is invalid. Contact operations; do not clear app data.');
- const db=await SQLite.openDatabaseAsync(`cargoorbit-${namespace}.db`);
+ const db=await SQLite.openDatabaseAsync(`cargoorbit-${namespace}.db`,{useNewConnection:true});
  try{
  await db.execAsync(`PRAGMA key = "x'${key}'";`);
  const cipher=await db.getFirstAsync<Record<string,string>>('PRAGMA cipher_version;');if(!cipher||!Object.values(cipher).some(Boolean))throw new Error('Encrypted storage unavailable. Install a CargoOrbit native build with SQLCipher; Expo Go is unsupported.');
@@ -63,7 +67,7 @@ export class EncryptedQueue {
  const media=base64?toByteArray(base64):null,id=Crypto.randomUUID(),now=new Date().toISOString();
  if(media&&await FileSystem.getFreeDiskStorageAsync()<media.length*3+10*1024*1024)throw new Error('Device storage is too low to durably capture evidence. Free space and try again.');
  const sha256=media?await hashBytes(media):null;
- await this.db.withExclusiveTransactionAsync(async tx=>{
+ await this.transaction(async tx=>{
  const count=await tx.getFirstAsync<{count:number;bytes:number}>("SELECT COALESCE(SUM(CASE WHEN state!='synchronized' AND kind!='photo' THEN 1 ELSE 0 END),0) count,COALESCE(SUM(byte_count),0) bytes FROM operations WHERE id NOT IN (SELECT original_id FROM operation_replacements)");assertCapacity(count?.count||0,count?.bytes||0,media?.length||0,kind==='photo');
  if(kind==='draft'){const attemptId=payload.attemptId;if(typeof attemptId!=='string'||!attemptId)throw new Error('Choose an assigned delivery attempt before saving quantities.');const pending=await tx.getFirstAsync<{id:string}>("SELECT id FROM operations WHERE kind='draft' AND state!='synchronized' AND json_extract(payload,'$.attemptId')=? AND id NOT IN (SELECT original_id FROM operation_replacements)",attemptId);if(pending)throw new Error('A local draft for this delivery attempt is already queued. Synchronize or ask operations to review it before capturing another.');}
  const input={...payload,clientEventId:id};await tx.runAsync("INSERT INTO operations(id,kind,consignment_id,payload,media,sha256,byte_count,state,created_at,updated_at,retryable) VALUES(?,?,?,?,?,?,?,'pending',?,?,1)",id,kind,consignmentId,JSON.stringify(input),media,sha256,media?.length||0,now,now);
@@ -76,7 +80,7 @@ export class EncryptedQueue {
  markSynced(id:string,serverId:string):Promise<void>{return this.run(async()=>{await this.db.runAsync("UPDATE operations SET state='synchronized',server_id=?,media=NULL,byte_count=0,error=NULL,next_attempt_at=NULL,updated_at=? WHERE id=?",serverId,new Date().toISOString(),id);});}
  replaceHeldDraft(id:string,snapshot:WorkSnapshot,lines:Disposition[],reason:string):Promise<string>{return this.run(async()=>{
   const nextId=Crypto.randomUUID(),now=new Date().toISOString();
-  await this.db.withExclusiveTransactionAsync(async tx=>{
+  await this.transaction(async tx=>{
    const row=await tx.getFirstAsync<Row>(operationQuery+' WHERE op.id=?',id);if(!row)throw new Error('Original queued capture was not found.');
    const original=fromRow(row),input={...draftReplacement(original,snapshot,lines,reason),clientEventId:nextId};
    await tx.runAsync("INSERT INTO operations(id,kind,consignment_id,payload,state,created_at,updated_at,retryable) VALUES(?,'draft',?,?,'pending',?,?,1)",nextId,original.consignmentId,JSON.stringify(input),now,now);
@@ -86,7 +90,7 @@ export class EncryptedQueue {
  });}
  queueEscalation(id:string,reason:string):Promise<string>{return this.run(async()=>{
   const requestId=Crypto.randomUUID();let result=requestId;
-  await this.db.withExclusiveTransactionAsync(async tx=>{
+  await this.transaction(async tx=>{
    const existing=await tx.getFirstAsync<{id:string}>('SELECT id FROM queue_escalations WHERE operation_id=?',id);if(existing){result=existing.id;return;}
    const row=await tx.getFirstAsync<Row>(operationQuery+' WHERE op.id=?',id);if(!row)throw new Error('Retained capture was not found.');
    const count=await tx.getFirstAsync<{count:number}>("SELECT COUNT(*) count FROM queue_escalations WHERE state!='synchronized'");if((count?.count||0)>=100)throw new Error('Synchronize existing review requests before adding more.');

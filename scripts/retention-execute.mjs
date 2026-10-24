@@ -8,7 +8,7 @@ import {retentionPlan,digest} from './retention-policy.mjs';
 process.umask(0o077);
 const readJson=async path=>{if(!path)return undefined;const info=await stat(path);if(info.size>8*1024*1024)throw new Error('RETENTION_FILE_TOO_LARGE');return JSON.parse(await readFile(path,'utf8'));};
 async function snapshot(client,tenantId,requestId){
- const tenant=(await client.query('SELECT id,status FROM tenants WHERE id=$1 FOR UPDATE',[tenantId])).rows[0];
+ const tenant=(await client.query('SELECT id,status,features FROM tenants WHERE id=$1 FOR UPDATE',[tenantId])).rows[0];
  const request=(await client.query("SELECT data FROM entities WHERE tenant_id=$1 AND kind='retention_requests' AND id=$2 FOR UPDATE",[tenantId,requestId])).rows[0]?.data;
  const owners=(await client.query("SELECT u.id FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=$1 AND m.role='owner' AND m.status='active' AND u.status='active' FOR SHARE OF u,m",[tenantId])).rows;
  const activeHolds=(await client.query("SELECT id FROM entities WHERE tenant_id=$1 AND kind='legal_holds' AND data->>'status'='active'",[tenantId])).rows;
@@ -25,6 +25,7 @@ async function execute(client,s,plan,manifest,operator){
   const tables=(await client.query("SELECT table_name FROM information_schema.columns WHERE table_schema='public' AND column_name='tenant_id'")).rows.map(r=>r.table_name);
   if(tables.some(name=>!['entities','audit_events','outbox_events','memberships','tenant_usage'].includes(name)))throw new Error('UNREVIEWED_TENANT_TABLE');
   const userIds=(await client.query('SELECT DISTINCT user_id FROM memberships WHERE tenant_id=$1',[s.tenantId])).rows.map(r=>r.user_id);
+  await client.query('DELETE FROM exit_sessions WHERE membership_id IN (SELECT id FROM memberships WHERE tenant_id=$1)',[s.tenantId]);
   await client.query('DELETE FROM auth_sessions WHERE membership_id IN (SELECT id FROM memberships WHERE tenant_id=$1)',[s.tenantId]);
   await client.query('DELETE FROM memberships WHERE tenant_id=$1',[s.tenantId]);
   await client.query('DELETE FROM users WHERE id=ANY($1::text[]) AND NOT EXISTS(SELECT 1 FROM memberships WHERE user_id=users.id) AND NOT EXISTS(SELECT 1 FROM auth_sessions WHERE user_id=users.id)',[userIds]);
@@ -35,10 +36,10 @@ async function execute(client,s,plan,manifest,operator){
   await client.query('ALTER TABLE entities ENABLE TRIGGER entities_finalized_pod; ALTER TABLE entities ENABLE TRIGGER entities_history_immutable; ALTER TABLE audit_events ENABLE TRIGGER audit_immutable');
   await client.query("UPDATE tenants SET status='closed',name='Closed tenant',features='{}'::jsonb WHERE id=$1",[s.tenantId]);
  }else{
-  await client.query("UPDATE tenants SET status='closing' WHERE id=$1",[s.tenantId]);await client.query('UPDATE auth_sessions SET revoked_at=now() WHERE membership_id IN (SELECT id FROM memberships WHERE tenant_id=$1)',[s.tenantId]);
+  await client.query("UPDATE tenants SET status='closing',features=features||jsonb_build_object('exitExportUntil',$2::text,'exitExportReceiptId',$3::text) WHERE id=$1",[s.tenantId,manifest.exportWindowEndsAt,manifest.exportReceipt.exportId]);await client.query('UPDATE auth_sessions SET revoked_at=now() WHERE membership_id IN (SELECT id FROM memberships WHERE tenant_id=$1)',[s.tenantId]);
   await client.query("UPDATE entities SET data=data||jsonb_build_object('executionStatus','completed','executedAt',now()::text,'executionPlanSha256',$3::text) WHERE tenant_id=$1 AND kind='retention_requests' AND id=$2",[s.tenantId,s.requestId,plan.planSha256]);
  }
- const receipt={format:'cargoorbit-retention-execution-v1',operatorReference:operator,approvalIdentityHashes:plan.approverIds.map(id=>digest(id)),dispositionSha256:plan.dispositionSha256,inventorySha256:plan.inventorySha256,exportSha256:manifest.exportReceipt.sha256,exportReceiptReference:manifest.exportReceipt.receiptReference,backupInventoryReference:manifest.backupInventory?.reference,objectVersionsVerifiedAbsent:plan.action==='delete',backupsVerifiedBySignedDisposition:plan.action==='delete',action:plan.action};
+ const receipt={format:'cargoorbit-retention-execution-v1',operatorReference:operator,approvalIdentityHashes:plan.approverIds.map(id=>digest(id)),dispositionSha256:plan.dispositionSha256,inventorySha256:plan.inventorySha256,exportSha256:manifest.exportReceipt.sha256,exportReceiptReference:manifest.exportReceipt.receiptReference,exportWindowEndsAt:manifest.exportWindowEndsAt,backupInventoryReference:manifest.backupInventory?.reference,objectVersionsVerifiedAbsent:plan.action==='delete',backupsVerifiedBySignedDisposition:plan.action==='delete',action:plan.action};
  await client.query('INSERT INTO retention_execution_receipts(id,tenant_id_hash,request_id,action,plan_sha256,receipt) VALUES($1,$2,$3,$4,$5,$6::jsonb)',[randomUUID(),digest(s.tenantId),s.requestId,plan.action,plan.planSha256,JSON.stringify(receipt)]);
  return receipt;
 }
