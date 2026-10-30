@@ -1,0 +1,138 @@
+# NON-PRODUCTION single-host demo. Fictional seed data only.
+# No malware scanning (development-clean), local evidence disk, in-app development OTPs,
+# public API explorer at /v1/docs and no message delivery. Never upload real evidence here.
+# Setup: `sh infra/demo-env.sh <hostname>`, `--profile operator build`, then operator jobs
+# `npm run db:migrate`, `npm run db:provision`, `npm run db:seed`, then `up -d`.
+name: cargoorbit-demo
+x-app: &app
+  image: cargoorbit:demo
+  pull_policy: never
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [application]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: '5'}
+x-build: &build
+  context: .
+  args:
+    NEXT_PUBLIC_API_URL: https://${APP_DOMAIN:?Set APP_DOMAIN}/v1
+x-api-environment: &api-environment
+  NODE_ENV: development
+  PORT: '4000'
+  DATABASE_URL: postgresql://cargoorbit_runtime:${RUNTIME_DATABASE_PASSWORD:?Set RUNTIME_DATABASE_PASSWORD}@postgres:5432/cargoorbit
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+  OTP_SECRET: ${OTP_SECRET:?Set OTP_SECRET}
+  MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?Set MFA_ENCRYPTION_KEY}
+  WEB_ORIGIN: https://${APP_DOMAIN}
+  APP_PUBLIC_URL: https://${APP_DOMAIN}
+  OIDC_CONFIG_JSON: '[]'
+  INTEGRATION_CONFIG_JSON: '[]'
+  EVIDENCE_STORAGE: local
+  EVIDENCE_ROOT: /var/lib/cargoorbit-evidence
+  MALWARE_SCANNER: development-clean
+  # Only the Caddy proxy below may supply X-Forwarded-For, so rate limits see real client IPs.
+  TRUST_PROXY_CIDRS: 172.30.203.10
+  WORKER_CONCURRENCY: '2'
+  DB_POOL_SIZE: '10'
+  DB_STATEMENT_TIMEOUT_MS: '30000'
+  DB_LOCK_TIMEOUT_MS: '10000'
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cargoorbit
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    networks: [application]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d cargoorbit']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  # One-off owner jobs: `docker compose -f compose.demo.yaml run --rm operator npm run db:migrate`.
+  # The owner credential stays here and never reaches api/worker/web.
+  operator:
+    build: {<<: *build, target: operator}
+    image: cargoorbit-operator:demo
+    profiles: [operator]
+    networks: [application]
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/cargoorbit
+      RUNTIME_DATABASE_PASSWORD: ${RUNTIME_DATABASE_PASSWORD}
+      DATABASE_URL: postgresql://cargoorbit_runtime:${RUNTIME_DATABASE_PASSWORD}@postgres:5432/cargoorbit
+      OTP_SECRET: ${OTP_SECRET}
+      SEED_PASSWORD: ${SEED_PASSWORD:?Set SEED_PASSWORD}
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    <<: *app
+    build: {<<: *build, target: runtime}
+    command: [node, apps/api/dist/main.js]
+    environment: *api-environment
+    volumes: [evidence:/var/lib/cargoorbit-evidence]
+    expose: ['4000']
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4000/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  worker:
+    <<: *app
+    command: [node, apps/api/dist/worker.js]
+    environment:
+      <<: *api-environment
+      TMPDIR: /var/lib/cargoorbit-export
+    volumes:
+      - evidence:/var/lib/cargoorbit-evidence
+      - export-staging:/var/lib/cargoorbit-export
+    depends_on:
+      api: {condition: service_healthy}
+  web:
+    <<: *app
+    command: [npm, run, start, -w, '@cargoorbit/web']
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+    expose: ['3000']
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ['80:80', '443:443']
+    environment: {APP_DOMAIN: '${APP_DOMAIN}'}
+    networks:
+      application: {ipv4_address: 172.30.203.10}
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api: {condition: service_healthy}
+      web: {condition: service_healthy}
+networks:
+  application:
+    ipam:
+      config: [{subnet: 172.30.203.0/24}]
+volumes:
+  pgdata:
+  evidence:
+  export-staging:
+  caddy-data:
+  caddy-config:

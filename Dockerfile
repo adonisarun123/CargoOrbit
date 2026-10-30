@@ -38,7 +38,8 @@ COPY --from=build --chown=node:node /app/apps/api/dist /app/apps/api/dist
 COPY --from=build --chown=node:node /app/apps/web/.next /app/apps/web/.next
 COPY --from=build --chown=node:node /app/apps/web/public /app/apps/web/public
 COPY --from=build --chown=node:node /app/apps/web/next.config.ts /app/apps/web/next.config.ts
-RUN mkdir -p /var/lib/cargoorbit-export && chown node:node /var/lib/cargoorbit-export
+# Evidence directory is used only by the non-production demo stack's local storage volume.
+RUN mkdir -p /var/lib/cargoorbit-export /var/lib/cargoorbit-evidence && chown node:node /var/lib/cargoorbit-export /var/lib/cargoorbit-evidence
 USER node
 EXPOSE 3000 4000
 # API, worker and web use the same immutable image with distinct commands.
