@@ -1,4 +1,4 @@
-# CargoOrbit Driver for Android
+# FreyTara Driver for Android
 
 The driver application captures assigned delivery-attempt milestones, photo evidence and provisional quantities. It never finalizes customer acceptance offline. Receiver OTP approval remains an authenticated server workflow.
 
@@ -15,7 +15,7 @@ npm run android
 
 SQLCipher is enabled by the Expo SQLite config plugin. **Expo Go is not supported**: startup probes `cipher_version` and refuses unencrypted storage. Preview and production native builds require an explicit HTTPS `EXPO_PUBLIC_API_URL`; missing/unsafe URLs fail before packaging. A local development build may opt into emulator HTTP with `CARGOORBIT_ALLOW_DEV_HTTP=true`. Release Android manifests deny cleartext traffic and device backup.
 
-Hosted [Android validation run 40120184596](https://github.com/adonisarun123/CargoOrbit/actions/runs/40120184596), at component commit `c57f1b02ac190984df368b37e4b15d192c9efc21`, compiled both unsigned APKs and passed the API 36 x86_64 emulator's encrypted-storage and forced-restart checks. Both saved phase-marker XML files were independently inspected. See [the evidence and limits](../../docs/ANDROID_SECURITY_REVIEW.md#hosted-native-validation-evidence).
+Hosted [Android validation run 40120184596](https://github.com/adonisarun123/FreyTara/actions/runs/40120184596), at component commit `c57f1b02ac190984df368b37e4b15d192c9efc21`, compiled both unsigned APKs and passed the API 36 x86_64 emulator's encrypted-storage and forced-restart checks. Both saved phase-marker XML files were independently inspected. See [the evidence and limits](../../docs/ANDROID_SECURITY_REVIEW.md#hosted-native-validation-evidence).
 
 These are validation artifacts configured with `https://example.invalid/v1`. The operator must rebuild with the real HTTPS API, supply the approved Android signing identity, and complete physical-device/live-service acceptance before distribution. No production signing key or distributable production APK is included.
 
@@ -69,7 +69,7 @@ The harness requires an isolated emulator and refuses any APK with another packa
 - Stale, unauthorized or invalid data is retained on device for review. No “force overwrite” or silent discard is offered.
 - Account shutdown permanently stops that sync engine and waits for storage operations before closing. A stale reconnect callback cannot restart another user's queue.
 - Existing queued work may recover at any time; new capture is blocked when assignment snapshots exceed 24 hours without server refresh. Offline revocations cannot be known until reconnect.
-- Photos temporarily exist as plaintext **inside the app's private cache** during the native camera/upload APIs. Cleanup runs in `finally`, and orphan CargoOrbit upload files are removed on startup/sign-out. Sudden process/OS failure can interrupt cleanup; this implementation does not claim forensic secure deletion or uninterrupted encryption during native camera capture. Include this boundary in the device threat assessment.
+- Photos temporarily exist as plaintext **inside the app's private cache** during the native camera/upload APIs. Cleanup runs in `finally`, and orphan FreyTara upload files are removed on startup/sign-out. Sudden process/OS failure can interrupt cleanup; this implementation does not claim forensic secure deletion or uninterrupted encryption during native camera capture. Include this boundary in the device threat assessment.
 
 ## Automated validation
 

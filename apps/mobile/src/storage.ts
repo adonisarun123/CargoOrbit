@@ -34,7 +34,7 @@ export class EncryptedQueue {
  const db=await SQLite.openDatabaseAsync(`cargoorbit-${namespace}.db`,{useNewConnection:true});
  try{
  await db.execAsync(`PRAGMA key = "x'${key}'";`);
- const cipher=await db.getFirstAsync<Record<string,string>>('PRAGMA cipher_version;');if(!cipher||!Object.values(cipher).some(Boolean))throw new Error('Encrypted storage unavailable. Install a CargoOrbit native build with SQLCipher; Expo Go is unsupported.');
+ const cipher=await db.getFirstAsync<Record<string,string>>('PRAGMA cipher_version;');if(!cipher||!Object.values(cipher).some(Boolean))throw new Error('Encrypted storage unavailable. Install a FreyTara native build with SQLCipher; Expo Go is unsupported.');
  await db.execAsync(`PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;PRAGMA cipher_memory_security=ON;PRAGMA secure_delete=ON;
  CREATE TABLE IF NOT EXISTS owner(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS cached_resources(id TEXT PRIMARY KEY,data TEXT NOT NULL);

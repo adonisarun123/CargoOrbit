@@ -31,7 +31,7 @@ export async function bootstrap(){
  app.setGlobalPrefix('v1');app.use(helmet());app.useBodyParser('json',{limit:'2mb'});app.useBodyParser('urlencoded',{limit:'256kb',extended:false});
  app.enableCors({origin:config.origins,methods:['GET','POST','OPTIONS'],allowedHeaders:['Authorization','Content-Type','X-Request-Id','Idempotency-Key','X-Step-Up','X-Content-SHA256'],exposedHeaders:['X-Request-Id','X-Archive-SHA256','X-Archive-Bytes'],credentials:false});
  app.useGlobalFilters(new Errors());
- if(!production){const document=SwaggerModule.createDocument(app,new DocumentBuilder().setTitle('CargoOrbit API').setDescription('Tenant scoped logistics workflows. Sensitive changes require a scoped X-Step-Up token.').setVersion('0.2.0').addBearerAuth().build());SwaggerModule.setup('v1/docs',app,document);}
+ if(!production){const document=SwaggerModule.createDocument(app,new DocumentBuilder().setTitle('FreyTara API').setDescription('Tenant scoped logistics workflows. Sensitive changes require a scoped X-Step-Up token.').setVersion('0.2.0').addBearerAuth().build());SwaggerModule.setup('v1/docs',app,document);}
  app.enableShutdownHooks();await app.listen(config.port,'0.0.0.0');return app;
 }
 if(process.argv[1]?.endsWith('/main.js')||process.argv[1]?.endsWith('/main.ts'))bootstrap().catch(error=>{console.error(`API startup failed: ${error.constructor?.name||'Error'}`);process.exitCode=1;});

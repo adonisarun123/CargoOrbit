@@ -1,6 +1,6 @@
 # Architecture
 
-CargoOrbit uses a modular TypeScript core with independent web, API, worker and Android processes. PostgreSQL owns business transactions. Private storage owns immutable original bytes; database evidence records bind exact object versions and SHA-256 checksums. File metadata is not trusted as proof of identity or occurrence.
+FreyTara uses a modular TypeScript core with independent web, API, worker and Android processes. PostgreSQL owns business transactions. Private storage owns immutable original bytes; database evidence records bind exact object versions and SHA-256 checksums. File metadata is not trusted as proof of identity or occurrence.
 
 ## Data and tenancy
 

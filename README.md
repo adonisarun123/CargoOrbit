@@ -1,6 +1,6 @@
-# CargoOrbit
+# FreyTara
 
-Delivery evidence, authorized receiver acknowledgement, billing readiness and freight collections for Indian transport operations. Built from the supplied Viskan SRS v2 (24 October 2026), with CargoOrbit as the product name.
+Delivery evidence, authorized receiver acknowledgement, billing readiness and freight collections for Indian transport operations. Built from the supplied Viskan SRS v2 (24 October 2026), with FreyTara as the product name.
 
 **Status: hardened release candidate; production acceptance remains gated.** The repository includes the web portal, API/worker, Android source, migrations, deployment/recovery tooling and automated regression suites. M delivery/billing controls and phase-gated P2/P3/selected P4 workflows are implemented to the boundaries below. This does not claim all 104 SRS requirements or real provider/device acceptance are complete. See [requirement coverage](docs/REQUIREMENTS.md) for exact boundaries and [release gates](docs/OPERATIONS.md) before real customer use.
 

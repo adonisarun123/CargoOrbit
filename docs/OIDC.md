@@ -1,6 +1,6 @@
 # Optional OpenID Connect
 
-SSO is disabled unless operators configure `OIDC_CONFIG_JSON`. This is an authorization-code integration using `openid-client` 6.8.8, configured HTTPS providers and existing CargoOrbit memberships. It does not add SAML, SCIM, automatic account enrollment, tenant discovery from email domains, or an independent claim that an identity provider performed MFA.
+SSO is disabled unless operators configure `OIDC_CONFIG_JSON`. This is an authorization-code integration using `openid-client` 6.8.8, configured HTTPS providers and existing FreyTara memberships. It does not add SAML, SCIM, automatic account enrollment, tenant discovery from email domains, or an independent claim that an identity provider performed MFA.
 
 ## Configuration
 

@@ -60,6 +60,6 @@ describe('web API contracts',()=>{
   fetchMock.mockResolvedValue(response([{id:'a',status:'new'},{id:'b'}]));const next=await api.query('old','consignments',undefined,200);expect(fetchMock.mock.calls[0][0]).toContain('?limit=200&offset=200');expect(api.mergeRows([{id:'a',status:'old'}],next)).toEqual([{id:'a',status:'new'},{id:'b'}]);
  });
  it('turns network failure into an actionable error without replaying a mutation',async()=>{
-  fetchMock.mockRejectedValue(new TypeError('fetch failed'));await expect(api.action('old','saveDraft',{clientEventId:'stable'})).rejects.toMatchObject({status:0,message:'Unable to reach CargoOrbit. Check your connection and retry.'});expect(fetchMock).toHaveBeenCalledTimes(1);
+  fetchMock.mockRejectedValue(new TypeError('fetch failed'));await expect(api.action('old','saveDraft',{clientEventId:'stable'})).rejects.toMatchObject({status:0,message:'Unable to reach FreyTara. Check your connection and retry.'});expect(fetchMock).toHaveBeenCalledTimes(1);
  });
 });

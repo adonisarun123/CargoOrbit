@@ -62,7 +62,7 @@ export async function runWorkerOnce():Promise<number>{
  return processed;
 }
 async function main(){
- await database.assertRuntimeRole();await verifyStorage();await cleanupExportStaging();console.info('CargoOrbit durable outbox worker started');
+ await database.assertRuntimeRole();await verifyStorage();await cleanupExportStaging();console.info('FreyTara durable outbox worker started');
  // A long export occupies one slot; other slots keep evidence and notifications moving.
  const active=new Set<Promise<void>>();const concurrency=Number(process.env.WORKER_CONCURRENCY||4);
  if(!Number.isInteger(concurrency)||concurrency<2||concurrency>16)throw new Error('WORKER_CONCURRENCY must be between 2 and 16');

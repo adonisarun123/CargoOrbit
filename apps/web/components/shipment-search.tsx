@@ -40,7 +40,7 @@ export function ShipmentSearch({session,site,onOpen}:{session:Session;site:(id?:
    {error&&<ErrorNotice message={error} onRetry={active&&!result?()=>void load(active):undefined}/>}
    <div role="status" aria-live="polite" className="shipment-search-summary">{busy?'Searching or opening the authorized shipment…':result&&active?`${result.items.length} shipment${result.items.length===1?'':'s'} on page ${active.index+1} for “${active.criteria.q}”`:''}</div>
    {result&&active?<>
-    <div className="panel-heading"><div><h2>Matching shipments</h2><p>Each shipment appears once per page. Matching references explain the connection.</p></div><DownloadCsv label="Export this page" disabled={busy} rows={searchCsvRows(result.items)} filename={`cargoorbit-search-page-${active.index+1}.csv`}/></div>
+    <div className="panel-heading"><div><h2>Matching shipments</h2><p>Each shipment appears once per page. Matching references explain the connection.</p></div><DownloadCsv label="Export this page" disabled={busy} rows={searchCsvRows(result.items)} filename={`freytara-search-page-${active.index+1}.csv`}/></div>
     {result.items.length?<Table headers={['Shipment / LR','Route','Matching references','Status','']}>{result.items.map(item=><tr key={item.id}>
      <td><strong>{item.lrNumber}</strong><small>{[item.branch,item.financialYear].filter(Boolean).join(' · ')}</small><small className="search-shipment-id">{item.id}</small></td>
      <td><strong>{site(item.originId)}</strong><small>To {site(item.destinationId)}</small></td>
