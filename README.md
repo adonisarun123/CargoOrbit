@@ -37,7 +37,7 @@ npm run worker
 
 Open http://localhost:3000. API: http://localhost:4000/v1. Development API explorer: http://localhost:4000/v1/docs.
 
-Seeding creates fictional companies and six consignments. Sign in with `owner@cargoorbit.test`, `operations@cargoorbit.test`, `receiver@cargoorbit.test`, `customer_admin@cargoorbit.test`, `finance@cargoorbit.test`, `customer_finance@cargoorbit.test`, or `driver@cargoorbit.test` using **your own `SEED_PASSWORD`**. It never sends messages and refuses production execution or an existing demo tenant.
+Seeding creates fictional companies and six consignments. Sign in with `owner@freytara.com`, `operations@freytara.com`, `receiver@freytara.com`, `customer_admin@freytara.com`, `finance@freytara.com`, `customer_finance@freytara.com`, or `driver@freytara.com` using **your own `SEED_PASSWORD`**. It never sends messages and refuses production execution or an existing demo tenant.
 
 For local-only photo experiments without ClamAV, `MALWARE_SCANNER=development-clean` is an explicit unsafe development bypass. Production rejects it. Do not use real evidence with that setting.
 

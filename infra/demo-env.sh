@@ -19,4 +19,4 @@ MFA_ENCRYPTION_KEY=$(openssl rand -hex 32)
 SEED_PASSWORD=$seed
 EOF
 echo "Wrote .env for https://$domain"
-echo "Demo sign-in password for <role>@cargoorbit.test: $seed"
+echo "Demo sign-in password for <role>@freytara.com: $seed"
